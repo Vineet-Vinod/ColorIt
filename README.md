@@ -34,6 +34,7 @@ uv run colorit verify-env
 uv run colorit download-weights
 uv run colorit colorize-frame --input input.png --output output.png
 uv run colorit extract-probes --movie ~/Movies/Kannada/'emme thammanna.mp4' --clip clip_01=00:10:00-00:10:15
+uv run colorit colorize-clip --input data/probe_clips/clip_01.mp4 --output data/colorized/probes/clip_01_quality.mp4 --config configs/quality.yaml
 ```
 
 By default, `download-weights` fetches:
@@ -79,6 +80,20 @@ uv run colorit extract-probes \
 ```
 
 Output clips are written to `data/probe_clips/` and the manifest is written to `data/manifests/probe_clips.json`.
+
+### Baseline clip colorization
+
+Phase 2 baseline colorization is available for individual clips.
+
+```bash
+uv run colorit colorize-clip \
+  --input data/probe_clips/clip_01.mp4 \
+  --output data/colorized/probes/clip_01_quality.mp4 \
+  --config configs/quality.yaml \
+  --overwrite
+```
+
+Each run appends metadata to `data/manifests/probe_runs.json` unless you override the manifest path.
 
 ### Safety boundary
 

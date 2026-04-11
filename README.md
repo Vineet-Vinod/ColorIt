@@ -7,8 +7,8 @@ The current repository state is intentionally conservative:
 - Python tooling is pinned to `3.11`
 - the project layout matches the execution plan in [plan.md](/Users/darksca/ColorIt/plan.md)
 - model weights can be downloaded and checksummed
-- no DeOldify code is executed yet
-- no `.pth` file is loaded or unpickled yet
+- local inference uses a restricted checkpoint load path
+- the checkpoint is not loaded via `weights_only=False`
 
 ## Environment setup
 
@@ -17,7 +17,8 @@ This phase avoids running untrusted model code. The only supported bootstrap tas
 - validating local prerequisites
 - creating the expected working layout
 - downloading `ColorizeVideo_gen.pth`
-- recording file metadata and SHA-256 without loading the file
+- recording file metadata and SHA-256
+- verifying restricted model loading and single-frame inference
 
 ### Prerequisites
 
@@ -31,6 +32,7 @@ This phase avoids running untrusted model code. The only supported bootstrap tas
 ```bash
 uv run colorit verify-env
 uv run colorit download-weights
+uv run colorit colorize-frame --input input.png --output output.png
 ```
 
 By default, `download-weights` fetches:
@@ -43,4 +45,9 @@ It also writes a metadata manifest to `data/manifests/weights.json`.
 
 ### Safety boundary
 
-`verify-env` currently does not load DeOldify, import PyTorch, or unpickle model weights. That work is intentionally deferred until we move model execution into a sandboxed environment.
+The checkpoint was first inspected in an isolated Lima VM. Local loading now uses:
+
+- `torch.load(..., weights_only=True)`
+- `torch.serialization.safe_globals([slice])`
+
+This checkpoint format requires allowlisting Python's built-in `slice`, but does not require `weights_only=False`.

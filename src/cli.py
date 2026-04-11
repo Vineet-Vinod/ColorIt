@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from src.pipeline.bootstrap import run_verify_env
+from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import load_config
 from src.pipeline.inference import colorize_image_file
 from src.pipeline.model_loader import load_colorizer_bundle
@@ -78,6 +79,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     frame_parser.set_defaults(handler=handle_colorize_frame)
 
+    clip_parser = subparsers.add_parser(
+        "colorize-clip",
+        help="Colorize a single video clip and preserve its audio track.",
+    )
+    clip_parser.add_argument("--config", default="configs/quality.yaml")
+    clip_parser.add_argument("--input", required=True, help="Input clip path.")
+    clip_parser.add_argument("--output", required=True, help="Output clip path.")
+    clip_parser.add_argument(
+        "--manifest-path",
+        default=None,
+        help="Optional run manifest override.",
+    )
+    clip_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite an existing output file.",
+    )
+    clip_parser.set_defaults(handler=handle_colorize_clip)
+
     probes_parser = subparsers.add_parser(
         "extract-probes",
         help="Extract reproducible probe clips from the source movie.",
@@ -147,6 +167,18 @@ def handle_colorize_frame(args: argparse.Namespace) -> int:
     )
     print(f"Colorized frame written to {Path(args.output).resolve()}")
     return 0
+
+
+def handle_colorize_clip(args: argparse.Namespace) -> int:
+    config = load_config(Path(args.config))
+    return run_colorize_clip(
+        config=config,
+        config_path=Path(args.config),
+        input_path=Path(args.input),
+        output_path=Path(args.output),
+        manifest_path=Path(args.manifest_path) if args.manifest_path else None,
+        overwrite=args.overwrite,
+    )
 
 
 def handle_extract_probes(args: argparse.Namespace) -> int:

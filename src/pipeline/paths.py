@@ -12,6 +12,7 @@ class ProjectPaths:
     source_dir: Path
     probe_dir: Path
     scene_dir: Path
+    frames_dir: Path
     colorized_dir: Path
     manifest_dir: Path
     final_dir: Path
@@ -28,6 +29,7 @@ def resolve_project_paths(config: AppConfig) -> ProjectPaths:
         source_dir=(root / path_config["source_dir"]).resolve(),
         probe_dir=(root / path_config["probe_dir"]).resolve(),
         scene_dir=(root / path_config["scene_dir"]).resolve(),
+        frames_dir=(root / "data/frames").resolve(),
         colorized_dir=(root / path_config["colorized_dir"]).resolve(),
         manifest_dir=(root / path_config["manifest_dir"]).resolve(),
         final_dir=(root / path_config["final_dir"]).resolve(),
@@ -41,6 +43,7 @@ def ensure_runtime_directories(paths: ProjectPaths) -> None:
         paths.source_dir,
         paths.probe_dir,
         paths.scene_dir,
+        paths.frames_dir,
         paths.colorized_dir,
         paths.manifest_dir,
         paths.final_dir,

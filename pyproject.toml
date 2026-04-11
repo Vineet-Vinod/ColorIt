@@ -1,0 +1,7 @@
+[project]
+name = "colorit"
+version = "0.1.0"
+description = "Use DeOldify model to color B/W Kannada Movies"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []

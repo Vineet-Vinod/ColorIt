@@ -1,7 +1,22 @@
 [project]
 name = "colorit"
 version = "0.1.0"
-description = "Use DeOldify model to color B/W Kannada Movies"
+description = "CLI-first pipeline scaffold for colorizing black-and-white Kannada films with DeOldify"
 readme = "README.md"
-requires-python = ">=3.12"
-dependencies = []
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "PyYAML>=6.0,<7.0",
+]
+
+[project.scripts]
+colorit = "src.cli:main"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["src", "src.*"]

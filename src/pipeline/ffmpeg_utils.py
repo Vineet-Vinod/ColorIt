@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+import shlex
 
 
 def extract_single_frame(*, input_path: Path, output_path: Path, time_seconds: float) -> None:
@@ -102,6 +103,70 @@ def get_media_duration_seconds(path: Path) -> float:
             f"ffprobe duration probe failed with code {result.returncode}: {result.stderr.strip()}"
         )
     return float(result.stdout.strip())
+
+
+def extract_frames(
+    *,
+    input_path: Path,
+    output_dir: Path,
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        str(output_dir / "%06d.png"),
+    ]
+    _run(command)
+
+
+def encode_video_from_frames(
+    *,
+    frame_dir: Path,
+    output_path: Path,
+    fps: str,
+    video_codec: str,
+    crf: int,
+    pixel_format: str,
+    audio_input_path: Path | None = None,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-y",
+        "-framerate",
+        fps_to_decimal_string(fps),
+        "-i",
+        str(frame_dir / "%06d.png"),
+    ]
+    if audio_input_path is not None:
+        command.extend(["-i", str(audio_input_path), "-map", "0:v:0", "-map", "1:a:0?"])
+    command.extend(
+        [
+            "-c:v",
+            video_codec,
+            "-crf",
+            str(crf),
+            "-pix_fmt",
+            pixel_format,
+        ]
+    )
+    if audio_input_path is not None:
+        command.extend(["-c:a", "aac", "-b:a", "192k", "-shortest"])
+    command.append(str(output_path))
+    _run(command)
+
+
+def fps_to_decimal_string(value: str) -> str:
+    if "/" not in value:
+        return value
+    numerator, denominator = value.split("/", 1)
+    return str(float(numerator) / float(denominator))
+
+
+def quote_command(command: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in command)
 
 
 def _run(command: list[str]) -> None:

@@ -33,6 +33,7 @@ This phase avoids running untrusted model code. The only supported bootstrap tas
 uv run colorit verify-env
 uv run colorit download-weights
 uv run colorit colorize-frame --input input.png --output output.png
+uv run colorit extract-probes --movie ~/Movies/Kannada/'emme thammanna.mp4' --clip clip_01=00:10:00-00:10:15
 ```
 
 By default, `download-weights` fetches:
@@ -42,6 +43,42 @@ By default, `download-weights` fetches:
 - destination: `models/deoldify/ColorizeVideo_gen.pth`
 
 It also writes a metadata manifest to `data/manifests/weights.json`.
+
+### Probe extraction
+
+Phase 1 extraction is available now.
+
+Example with inline clip specs:
+
+```bash
+uv run colorit extract-probes \
+  --movie ~/Movies/Kannada/'emme thammanna.mp4' \
+  --clip clip_01=00:10:00-00:10:15 \
+  --clip 'clip_02=00:15:00-00:15:12|dialogue_scene'
+```
+
+You can also provide a YAML or JSON file:
+
+```yaml
+- clip_id: clip_01
+  start_time: 00:10:00
+  end_time: 00:10:15
+  notes: close_up_face
+- clip_id: clip_02
+  start_time: 00:15:00
+  end_time: 00:15:12
+  notes: dialogue_scene
+```
+
+Run it with:
+
+```bash
+uv run colorit extract-probes \
+  --movie ~/Movies/Kannada/'emme thammanna.mp4' \
+  --clip-file clips.yaml
+```
+
+Output clips are written to `data/probe_clips/` and the manifest is written to `data/manifests/probe_clips.json`.
 
 ### Safety boundary
 

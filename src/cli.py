@@ -7,6 +7,7 @@ from src.pipeline.bootstrap import run_verify_env
 from src.pipeline.config import load_config
 from src.pipeline.inference import colorize_image_file
 from src.pipeline.model_loader import load_colorizer_bundle
+from src.pipeline.probes import run_extract_probes
 from src.pipeline.weights import run_download_weights
 
 
@@ -77,6 +78,39 @@ def build_parser() -> argparse.ArgumentParser:
     )
     frame_parser.set_defaults(handler=handle_colorize_frame)
 
+    probes_parser = subparsers.add_parser(
+        "extract-probes",
+        help="Extract reproducible probe clips from the source movie.",
+    )
+    probes_parser.add_argument("--config", default="configs/default.yaml")
+    probes_parser.add_argument(
+        "--movie",
+        default="~/Movies/Kannada/emme thammanna.mp4",
+        help="Source movie path.",
+    )
+    probes_parser.add_argument(
+        "--clip",
+        action="append",
+        default=[],
+        help="Clip spec in the form clip_id=HH:MM:SS-HH:MM:SS or clip_id=...|notes",
+    )
+    probes_parser.add_argument(
+        "--clip-file",
+        default=None,
+        help="Optional YAML or JSON file containing clip definitions.",
+    )
+    probes_parser.add_argument(
+        "--manifest-path",
+        default=None,
+        help="Optional output manifest override.",
+    )
+    probes_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing extracted clips.",
+    )
+    probes_parser.set_defaults(handler=handle_extract_probes)
+
     return parser
 
 
@@ -113,6 +147,19 @@ def handle_colorize_frame(args: argparse.Namespace) -> int:
     )
     print(f"Colorized frame written to {Path(args.output).resolve()}")
     return 0
+
+
+def handle_extract_probes(args: argparse.Namespace) -> int:
+    config = load_config(Path(args.config))
+    return run_extract_probes(
+        config=config,
+        config_path=Path(args.config),
+        movie_path=Path(args.movie),
+        clip_specs=list(args.clip),
+        clip_file=Path(args.clip_file) if args.clip_file else None,
+        manifest_path=Path(args.manifest_path) if args.manifest_path else None,
+        force=args.force,
+    )
 
 
 def main() -> int:

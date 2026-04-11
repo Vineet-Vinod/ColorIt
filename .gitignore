@@ -13,6 +13,8 @@ data/colorized/
 data/final/
 data/frames/
 data/logs/
+data/probe_clips/*
+data/scenes/*
 data/manifests/*.json
 
 # Allow directory placeholders

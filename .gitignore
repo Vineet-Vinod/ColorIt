@@ -1,10 +1,20 @@
-# Python-generated files
+.DS_Store
+.venv/
+*.egg-info/
 __pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
 
-# Virtual environments
-.venv
+# Model weights and generated media
+models/deoldify/*.pth
+data/colorized/
+data/final/
+data/frames/
+data/logs/
+data/manifests/*.json
+
+# Allow directory placeholders
+!data/**/.gitkeep
+!models/deoldify/.gitkeep

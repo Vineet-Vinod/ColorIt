@@ -1,0 +1,36 @@
+model:
+  repo_id: spensercai/DeOldify
+  filename: ColorizeVideo_gen.pth
+  weights_path: models/deoldify/ColorizeVideo_gen.pth
+  render_factor: 21
+
+runtime:
+  backend_preference: mps
+  fallback_backend: cpu
+  num_workers: 1
+  deterministic: true
+
+video:
+  preserve_fps: true
+  output_codec: libx264
+  crf: 16
+  pixel_format: yuv420p
+
+scenes:
+  detect: true
+  min_scene_seconds: 2.0
+  max_scene_seconds: 90.0
+  overlap_seconds: 1.0
+
+postprocess:
+  temporal_smoothing: false
+  smoothing_strength: 0.0
+
+paths:
+  source_dir: data/source
+  probe_dir: data/probe_clips
+  scene_dir: data/scenes
+  colorized_dir: data/colorized
+  manifest_dir: data/manifests
+  final_dir: data/final
+  log_dir: data/logs

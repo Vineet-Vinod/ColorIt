@@ -46,3 +46,18 @@ Validation completed:
 - `detect-scenes` on the full movie
 - `colorize-batch --resume --limit 2`
 - `assemble-final --limit 2`
+
+## Compression
+
+The review-copy compression profile is now locked into the pipeline.
+
+- video codec: `libx264`
+- preset: `slow`
+- `CRF 22`
+- audio: `AAC 128k`
+- `+faststart`
+
+Validation completed:
+
+- `compress-final` on `scenes_t060_first2.mp4`
+- full-movie review copy generated at `emme_thammanna_colorized_v1_crf22_slow.mp4`

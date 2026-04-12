@@ -39,6 +39,7 @@ uv run colorit colorize-clip --input data/probe_clips/clip_01.mp4 --output data/
 uv run colorit detect-scenes --movie ~/Movies/Kannada/'emme thammanna.mp4' --output data/manifests/scenes_t060.json --threshold 0.60
 uv run colorit colorize-batch --movie ~/Movies/Kannada/'emme thammanna.mp4' --scene-manifest data/manifests/scenes_t060.json --config configs/full_movie.yaml --resume
 uv run colorit assemble-final --scene-manifest data/manifests/scenes_t060.json --config configs/full_movie.yaml
+uv run colorit compress-final --config configs/full_movie.yaml --input data/final/emme_thammanna_colorized_v1.mp4
 ```
 
 By default, `download-weights` fetches:
@@ -161,6 +162,28 @@ uv run colorit assemble-final \
   --config configs/full_movie.yaml \
   --output data/final/emme_thammanna_colorized_v1.mp4
 ```
+
+Then generate the locked review copy:
+
+```bash
+uv run colorit compress-final \
+  --config configs/full_movie.yaml \
+  --input data/final/emme_thammanna_colorized_v1.mp4
+```
+
+The current locked review profile is:
+
+- video codec: `libx264`
+- preset: `slow`
+- `CRF 22`
+- audio: `AAC 128k`
+- `+faststart`
+
+By default this writes:
+
+- input: `data/final/emme_thammanna_colorized_v1.mp4`
+- output: `data/final/emme_thammanna_colorized_v1_crf22_slow.mp4`
+- manifest: `data/manifests/compression_emme_thammanna_colorized_v1.json`
 
 ### Safety boundary
 

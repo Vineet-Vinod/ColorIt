@@ -204,17 +204,17 @@ The benchmark manifest is written to `data/manifests/benchmark_runs.json`.
 
 Current baseline findings on representative probe clips:
 
-- effective throughput is about `8 fps` on `mps`
-- model inference is about `37-38%` of clip runtime
-- PNG frame saves are about `35-39%` of clip runtime
-- PNG frame decode is about `7-9%`
-- ffmpeg extract + encode is relatively small
-- sampled GPU device utilization averaged about `79-82%`
+- the old PNG-frame path delivered about `8 fps` on `mps`
+- the streamed `pipe` path delivers about `16 fps` on the same representative clips
+- the old PNG path spent about `35-39%` of runtime saving frames and `7-9%` decoding them back
+- the streamed path reduces frame transport overhead to about `1-2s` total per clip
+- sampled GPU device utilization improved from about `79-82%` to about `84-86%`
 
 Implication:
 
-- the first optimization target is pipeline I/O reduction, not custom shaders
-- removing PNG round-trips should be evaluated before backend-specific compute work
+- the first major optimization was pipeline I/O reduction, not custom shaders
+- the default runtime transport is now `pipe`
+- shader work is still not the first justified optimization target
 
 ### Safety boundary
 

@@ -87,3 +87,25 @@ Implication:
 - the current v1 pipeline is not purely model-bound
 - shader work is not the first justified optimization
 - the next perf experiment should remove the PNG round-trip and re-benchmark
+
+## Streaming Frame Transport
+
+The PNG round-trip has now been replaced with streamed rawvideo frame transport through ffmpeg pipes.
+
+Observed on the same representative clip set:
+
+- throughput: about `15.9-16.1 fps`
+- GPU utilization average: about `84-86%`
+- process CPU average: about `74-78%`
+
+Dominant stage costs after the transport change:
+
+- model inference remains the clear runtime leader
+- frame transport overhead dropped from roughly `43-47%` combined to roughly `1-2s` total per clip
+- this is roughly a `2x` throughput improvement versus the PNG path
+
+Implication:
+
+- pipeline I/O was the main v1 performance tax
+- moving to custom shaders is still premature
+- the next perf work should focus on reducing remaining Python/image conversion overhead and evaluating whether decode/encode can overlap more cleanly with inference

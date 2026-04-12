@@ -55,6 +55,22 @@ def colorize_rgb_frame(
     return result
 
 
+def colorize_rgb_batch(
+    *,
+    model_bundle: ModelBundle,
+    input_rgbs: list[np.ndarray],
+    render_factor: int,
+    postprocess_config: dict | None = None,
+) -> list[np.ndarray]:
+    results, _ = colorize_rgb_batch_profiled(
+        model_bundle=model_bundle,
+        input_rgbs=input_rgbs,
+        render_factor=render_factor,
+        postprocess_config=postprocess_config,
+    )
+    return results
+
+
 def colorize_pil_image(
     *,
     model_bundle: ModelBundle,
@@ -125,6 +141,59 @@ def colorize_rgb_frame_profiled(
     )
     postprocess_seconds = time.perf_counter() - postprocess_started
     return result, InferenceProfile(
+        preprocess_seconds=preprocess_seconds,
+        model_seconds=model_seconds,
+        postprocess_seconds=postprocess_seconds,
+    )
+
+
+def colorize_rgb_batch_profiled(
+    *,
+    model_bundle: ModelBundle,
+    input_rgbs: list[np.ndarray],
+    render_factor: int,
+    postprocess_config: dict | None = None,
+) -> tuple[list[np.ndarray], InferenceProfile]:
+    if not input_rgbs:
+        return [], InferenceProfile(0.0, 0.0, 0.0)
+
+    preprocess_started = time.perf_counter()
+    render_size = render_factor * 16
+    processed_inputs: list[np.ndarray] = []
+    input_sizes: list[tuple[int, int]] = []
+    for input_rgb in input_rgbs:
+        input_rgb = np.ascontiguousarray(input_rgb)
+        input_height, input_width = input_rgb.shape[:2]
+        input_sizes.append((input_height, input_width))
+        model_input = cv2.resize(input_rgb, (render_size, render_size), interpolation=cv2.INTER_LINEAR)
+        gray_input = cv2.cvtColor(model_input, cv2.COLOR_RGB2GRAY)
+        model_input = cv2.cvtColor(gray_input, cv2.COLOR_GRAY2RGB)
+        processed_inputs.append(model_input)
+
+    tensor = torch.from_numpy(np.stack(processed_inputs)).permute(0, 3, 1, 2).float() / 255.0
+    tensor = (tensor - IMAGENET_MEAN) / IMAGENET_STD
+    tensor = tensor.to(model_bundle.device)
+    preprocess_seconds = time.perf_counter() - preprocess_started
+
+    model_started = time.perf_counter()
+    with torch.no_grad():
+        outputs = model_bundle.model(tensor)
+    model_seconds = time.perf_counter() - model_started
+
+    postprocess_started = time.perf_counter()
+    outputs = (outputs * IMAGENET_STD.to(outputs.device)) + IMAGENET_MEAN.to(outputs.device)
+    outputs = outputs.clamp(0.0, 1.0)
+    results: list[np.ndarray] = []
+    for output, input_rgb, output_size in zip(outputs, input_rgbs, input_sizes, strict=True):
+        result = _post_process_tensor(
+            raw_color_tensor=output,
+            orig_np=input_rgb,
+            output_size=output_size,
+            postprocess_config=postprocess_config or {},
+        )
+        results.append(result)
+    postprocess_seconds = time.perf_counter() - postprocess_started
+    return results, InferenceProfile(
         preprocess_seconds=preprocess_seconds,
         model_seconds=model_seconds,
         postprocess_seconds=postprocess_seconds,

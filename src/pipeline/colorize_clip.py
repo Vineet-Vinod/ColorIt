@@ -19,6 +19,8 @@ from src.pipeline.ffmpeg_utils import (
     open_rawvideo_writer,
 )
 from src.pipeline.inference import (
+    colorize_rgb_batch,
+    colorize_rgb_batch_profiled,
     colorize_pil_image,
     colorize_pil_image_profiled,
     colorize_rgb_frame,
@@ -310,20 +312,27 @@ def _run_pipe_transport(
         raise RuntimeError("ffmpeg rawvideo reader failed to expose stdout/stderr pipes.")
     if writer.stdin is None or writer.stderr is None:
         raise RuntimeError("ffmpeg rawvideo writer failed to expose stdin/stderr pipes.")
+    inference_batch_size = max(1, int(config.raw.get("runtime", {}).get("inference_batch_size", 1)))
 
     try:
         while True:
-            frame_decode_started = time.perf_counter()
-            frame_data = _read_exact(reader.stdout, frame_bytes)
-            frame_decode_seconds += time.perf_counter() - frame_decode_started
-            if frame_data is None:
+            batch_frames: list[np.ndarray] = []
+            batch_read_started = time.perf_counter()
+            for _ in range(inference_batch_size):
+                frame_data = _read_exact(reader.stdout, frame_bytes)
+                if frame_data is None:
+                    break
+                batch_frames.append(
+                    np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
+                )
+            frame_decode_seconds += time.perf_counter() - batch_read_started
+            if not batch_frames:
                 break
 
-            input_rgb = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
             if collect_profile:
-                result_np, inference_profile = colorize_rgb_frame_profiled(
+                result_batch, inference_profile = colorize_rgb_batch_profiled(
                     model_bundle=bundle,
-                    input_rgb=input_rgb,
+                    input_rgbs=batch_frames,
                     render_factor=int(config.model["render_factor"]),
                     postprocess_config=postprocess_config,
                 )
@@ -331,29 +340,30 @@ def _run_pipe_transport(
                 inference_model_seconds += inference_profile.model_seconds
                 inference_postprocess_seconds += inference_profile.postprocess_seconds
             else:
-                result_np = colorize_rgb_frame(
+                result_batch = colorize_rgb_batch(
                     model_bundle=bundle,
-                    input_rgb=input_rgb,
+                    input_rgbs=batch_frames,
                     render_factor=int(config.model["render_factor"]),
                     postprocess_config=postprocess_config,
                 )
-            if bool(postprocess_config.get("temporal_smoothing", False)):
-                temporal_started = time.perf_counter()
-                result_np, previous_smoothed_frame = apply_temporal_smoothing(
-                    current_frame=result_np,
-                    previous_frame=previous_smoothed_frame,
-                    strength=float(postprocess_config.get("smoothing_strength", 0.0)),
-                    chroma_threshold=float(postprocess_config.get("smoothing_chroma_threshold", 24.0)),
-                    adaptive_boost=float(postprocess_config.get("adaptive_smoothing_boost", 0.0)),
-                )
-                temporal_smoothing_seconds += time.perf_counter() - temporal_started
-            else:
-                previous_smoothed_frame = result_np
+            for result_np in result_batch:
+                if bool(postprocess_config.get("temporal_smoothing", False)):
+                    temporal_started = time.perf_counter()
+                    result_np, previous_smoothed_frame = apply_temporal_smoothing(
+                        current_frame=result_np,
+                        previous_frame=previous_smoothed_frame,
+                        strength=float(postprocess_config.get("smoothing_strength", 0.0)),
+                        chroma_threshold=float(postprocess_config.get("smoothing_chroma_threshold", 24.0)),
+                        adaptive_boost=float(postprocess_config.get("adaptive_smoothing_boost", 0.0)),
+                    )
+                    temporal_smoothing_seconds += time.perf_counter() - temporal_started
+                else:
+                    previous_smoothed_frame = result_np
 
-            frame_write_started = time.perf_counter()
-            writer.stdin.write(result_np.tobytes())
-            frame_save_seconds += time.perf_counter() - frame_write_started
-            frame_count += 1
+                frame_write_started = time.perf_counter()
+                writer.stdin.write(result_np.tobytes())
+                frame_save_seconds += time.perf_counter() - frame_write_started
+                frame_count += 1
 
         writer.stdin.close()
         encode_started = time.perf_counter()

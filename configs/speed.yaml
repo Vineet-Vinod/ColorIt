@@ -17,6 +17,14 @@ video:
   crf: 18
   pixel_format: yuv420p
 
+compression:
+  review_video_codec: libx264
+  review_preset: slow
+  review_crf: 22
+  review_audio_codec: aac
+  review_audio_bitrate: 128k
+  review_faststart: true
+
 scenes:
   detect: true
   min_scene_seconds: 2.0

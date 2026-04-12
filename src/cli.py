@@ -7,6 +7,7 @@ from src.pipeline.assemble import run_assemble_final
 from src.pipeline.bootstrap import run_verify_env
 from src.pipeline.batch import run_colorize_batch
 from src.pipeline.colorize_clip import run_colorize_clip
+from src.pipeline.compress import run_compress_final
 from src.pipeline.config import load_config
 from src.pipeline.inference import colorize_image_file
 from src.pipeline.model_loader import load_colorizer_bundle
@@ -208,6 +209,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     assemble_parser.set_defaults(handler=handle_assemble_final)
 
+    compress_parser = subparsers.add_parser(
+        "compress-final",
+        help="Generate a smaller review copy from a final assembled movie.",
+    )
+    compress_parser.add_argument("--config", default="configs/full_movie.yaml")
+    compress_parser.add_argument(
+        "--input",
+        required=True,
+        help="Input assembled movie path.",
+    )
+    compress_parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional compressed output path.",
+    )
+    compress_parser.set_defaults(handler=handle_compress_final)
+
     return parser
 
 
@@ -302,6 +320,15 @@ def handle_assemble_final(args: argparse.Namespace) -> int:
         scene_manifest_path=Path(args.scene_manifest),
         output_path=Path(args.output) if args.output else None,
         limit=args.limit,
+    )
+
+
+def handle_compress_final(args: argparse.Namespace) -> int:
+    config = load_config(Path(args.config))
+    return run_compress_final(
+        config=config,
+        input_path=Path(args.input),
+        output_path=Path(args.output) if args.output else None,
     )
 
 

@@ -10,6 +10,7 @@ runtime:
   num_workers: 1
   deterministic: true
   frame_transport: pipe
+  inference_batch_size: 2
   cleanup_frames: true
   cleanup_scene_clips: true
 

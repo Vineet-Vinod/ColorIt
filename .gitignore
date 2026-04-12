@@ -16,6 +16,7 @@ data/logs/
 data/probe_clips/*
 data/scenes/*
 data/manifests/*.json
+data/manifests/concat_*.txt
 
 # Allow directory placeholders
 !data/**/.gitkeep

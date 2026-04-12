@@ -36,6 +36,9 @@ uv run colorit colorize-frame --input input.png --output output.png
 uv run colorit extract-probes --movie ~/Movies/Kannada/'emme thammanna.mp4' --clip clip_01=00:10:00-00:10:15
 uv run colorit colorize-clip --input data/probe_clips/clip_01.mp4 --output data/colorized/probes/clip_01_quality.mp4 --config configs/quality.yaml
 uv run colorit colorize-clip --input data/probe_clips/clip_01.mp4 --output data/colorized/probes/clip_01_quality_warm.mp4 --config configs/quality_warm.yaml
+uv run colorit detect-scenes --movie ~/Movies/Kannada/'emme thammanna.mp4' --output data/manifests/scenes_t060.json --threshold 0.60
+uv run colorit colorize-batch --movie ~/Movies/Kannada/'emme thammanna.mp4' --scene-manifest data/manifests/scenes_t060.json --config configs/full_movie.yaml --resume
+uv run colorit assemble-final --scene-manifest data/manifests/scenes_t060.json --config configs/full_movie.yaml
 ```
 
 By default, `download-weights` fetches:
@@ -105,6 +108,59 @@ The repository also includes warmed comparison presets:
 - `configs/quality_aggressive_smooth.yaml`
 
 These apply warm-bias correction, and `quality_warm_smooth.yaml` also adds lightweight temporal chroma smoothing for flicker reduction.
+
+## Current Baseline Decision
+
+The current v1 baseline remains `configs/quality.yaml`.
+
+Probe review findings:
+
+- the base quality preset is the best watchable tradeoff so far
+- warm/aggressive variants can reduce some cool bias, but they do not reliably fix model-level blue patches
+- fighting scenes still show color inconsistency in high motion
+- outdoor scenes flicker more than indoor scenes
+
+Known v1 limitations:
+
+- cool/blue patches can appear on skin and clothing
+- fast motion can cause color flips between adjacent frames
+- outdoor shots are less temporally stable than indoor shots
+
+## Overnight Movie Pass
+
+The current production path is:
+
+```bash
+uv run colorit detect-scenes \
+  --movie ~/Movies/Kannada/'emme thammanna.mp4' \
+  --output data/manifests/scenes_t060.json \
+  --threshold 0.60
+
+uv run colorit colorize-batch \
+  --movie ~/Movies/Kannada/'emme thammanna.mp4' \
+  --scene-manifest data/manifests/scenes_t060.json \
+  --config configs/full_movie.yaml \
+  --resume
+```
+
+Validated state:
+
+- `threshold 0.60` produced `412` scene units on the film
+- scene outputs are written to `data/colorized/scenes/scenes_t060/`
+- run manifests are written to:
+  - `data/manifests/full_run_scenes_t060.json`
+  - `data/manifests/scene_runs_scenes_t060.json`
+- `--resume` skips completed scene outputs cleanly
+- temporary extracted frame directories are cleaned up after successful clip renders
+
+After the batch finishes, assemble the final movie:
+
+```bash
+uv run colorit assemble-final \
+  --scene-manifest data/manifests/scenes_t060.json \
+  --config configs/full_movie.yaml \
+  --output data/final/emme_thammanna_colorized_v1.mp4
+```
 
 ### Safety boundary
 

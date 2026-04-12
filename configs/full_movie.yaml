@@ -9,6 +9,8 @@ runtime:
   fallback_backend: cpu
   num_workers: 1
   deterministic: true
+  cleanup_frames: true
+  cleanup_scene_clips: true
 
 video:
   preserve_fps: true
@@ -20,7 +22,7 @@ scenes:
   detect: true
   min_scene_seconds: 2.0
   max_scene_seconds: 90.0
-  overlap_seconds: 1.0
+  overlap_seconds: 0.0
 
 postprocess:
   temporal_smoothing: false

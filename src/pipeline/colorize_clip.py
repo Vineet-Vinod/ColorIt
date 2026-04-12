@@ -15,6 +15,8 @@ from src.pipeline.ffmpeg_utils import (
     encode_video_from_frames,
     extract_frames,
     ffprobe_media,
+    open_rawvideo_reader,
+    open_rawvideo_writer,
 )
 from src.pipeline.inference import colorize_pil_image, colorize_pil_image_profiled
 from src.pipeline.manifest import write_json_manifest
@@ -34,6 +36,7 @@ class ClipRunRecord:
     fps: str
     width: int
     height: int
+    frame_transport: str
     status: str
 
 
@@ -110,6 +113,7 @@ def run_colorize_clip_profiled(
     process_cpu_started = time.process_time()
     bundle = load_colorizer_bundle(config)
     model_load_seconds = time.perf_counter() - load_started
+    frame_transport = str(config.raw.get("runtime", {}).get("frame_transport", "png")).lower()
 
     run_hash = sha256(f"{input_path}:{output_path}:{config_path.resolve()}".encode()).hexdigest()[:12]
     frame_root = paths.frames_dir / f"clip_{run_hash}"
@@ -120,6 +124,7 @@ def run_colorize_clip_profiled(
     print(f"Output clip: {output_path}")
     print(f"Backend: {bundle.backend}")
     print(f"Render factor: {config.model['render_factor']}")
+    print(f"Frame transport: {frame_transport}")
 
     started = time.perf_counter()
     cleanup_frames = bool(config.raw.get("runtime", {}).get("cleanup_frames", True))
@@ -132,22 +137,187 @@ def run_colorize_clip_profiled(
     frame_save_seconds = 0.0
     encode_seconds = 0.0
     cleanup_seconds = 0.0
+    frame_count = 0
     try:
-        extract_started = time.perf_counter()
-        extract_frames(input_path=input_path, output_dir=source_frames_dir)
-        frame_extract_seconds = time.perf_counter() - extract_started
-
-        frame_paths = sorted(source_frames_dir.glob("*.png"))
-        if not frame_paths:
-            raise RuntimeError("No frames were extracted from the input clip.")
-
-        colorized_frames_dir.mkdir(parents=True, exist_ok=True)
         previous_smoothed_frame: np.ndarray | None = None
         postprocess_config = config.raw["postprocess"]
-        for frame_path in frame_paths:
+        if frame_transport == "pipe":
+            frame_count, frame_decode_seconds, inference_preprocess_seconds, inference_model_seconds, inference_postprocess_seconds, temporal_smoothing_seconds, frame_save_seconds, encode_seconds = _run_pipe_transport(
+                input_path=input_path,
+                output_path=output_path,
+                media_info=media_info,
+                config=config,
+                bundle=bundle,
+                postprocess_config=postprocess_config,
+                collect_profile=collect_profile,
+            )
+        else:
+            extract_started = time.perf_counter()
+            extract_frames(input_path=input_path, output_dir=source_frames_dir)
+            frame_extract_seconds = time.perf_counter() - extract_started
+
+            frame_paths = sorted(source_frames_dir.glob("*.png"))
+            if not frame_paths:
+                raise RuntimeError("No frames were extracted from the input clip.")
+            frame_count = len(frame_paths)
+
+            colorized_frames_dir.mkdir(parents=True, exist_ok=True)
+            for frame_path in frame_paths:
+                frame_decode_started = time.perf_counter()
+                input_image = Image.open(frame_path).convert("RGB")
+                frame_decode_seconds += time.perf_counter() - frame_decode_started
+                if collect_profile:
+                    result, inference_profile = colorize_pil_image_profiled(
+                        model_bundle=bundle,
+                        input_image=input_image,
+                        render_factor=int(config.model["render_factor"]),
+                        postprocess_config=postprocess_config,
+                    )
+                    inference_preprocess_seconds += inference_profile.preprocess_seconds
+                    inference_model_seconds += inference_profile.model_seconds
+                    inference_postprocess_seconds += inference_profile.postprocess_seconds
+                else:
+                    result = colorize_pil_image(
+                        model_bundle=bundle,
+                        input_image=input_image,
+                        render_factor=int(config.model["render_factor"]),
+                        postprocess_config=postprocess_config,
+                    )
+                result_np = np.asarray(result)
+                if bool(postprocess_config.get("temporal_smoothing", False)):
+                    temporal_started = time.perf_counter()
+                    result_np, previous_smoothed_frame = apply_temporal_smoothing(
+                        current_frame=result_np,
+                        previous_frame=previous_smoothed_frame,
+                        strength=float(postprocess_config.get("smoothing_strength", 0.0)),
+                        chroma_threshold=float(postprocess_config.get("smoothing_chroma_threshold", 24.0)),
+                        adaptive_boost=float(postprocess_config.get("adaptive_smoothing_boost", 0.0)),
+                    )
+                    temporal_smoothing_seconds += time.perf_counter() - temporal_started
+                else:
+                    previous_smoothed_frame = result_np
+
+                frame_save_started = time.perf_counter()
+                Image.fromarray(result_np).save(colorized_frames_dir / frame_path.name)
+                frame_save_seconds += time.perf_counter() - frame_save_started
+
+            encode_started = time.perf_counter()
+            encode_video_from_frames(
+                frame_dir=colorized_frames_dir,
+                output_path=output_path,
+                fps=str(media_info["fps"]),
+                video_codec=str(config.raw["video"]["output_codec"]),
+                crf=int(config.raw["video"]["crf"]),
+                pixel_format=str(config.raw["video"]["pixel_format"]),
+                audio_input_path=input_path,
+            )
+            encode_seconds = time.perf_counter() - encode_started
+        runtime_seconds = time.perf_counter() - started
+    finally:
+        cleanup_started = time.perf_counter()
+        if cleanup_frames and frame_root.exists():
+            shutil.rmtree(frame_root, ignore_errors=True)
+        cleanup_seconds = time.perf_counter() - cleanup_started
+    process_cpu_seconds = time.process_time() - process_cpu_started
+
+    record = ClipRunRecord(
+        input_path=str(input_path),
+        output_path=str(output_path),
+        config_path=str(config_path.resolve()),
+        render_factor=int(config.model["render_factor"]),
+        backend=bundle.backend,
+        runtime_seconds=runtime_seconds,
+        frame_count=frame_count,
+        fps=str(media_info["fps"]),
+        width=int(media_info["width"]),
+        height=int(media_info["height"]),
+        frame_transport=frame_transport,
+        status="succeeded",
+    )
+
+    manifest_path = (
+        manifest_path.expanduser().resolve()
+        if manifest_path is not None
+        else paths.manifest_dir / "probe_runs.json"
+    )
+    update_probe_runs_manifest(manifest_path, record)
+    stage_profile = (
+        ClipStageProfile(
+            model_load_seconds=model_load_seconds,
+            frame_extract_seconds=frame_extract_seconds,
+            frame_decode_seconds=frame_decode_seconds,
+            inference_preprocess_seconds=inference_preprocess_seconds,
+            inference_model_seconds=inference_model_seconds,
+            inference_postprocess_seconds=inference_postprocess_seconds,
+            temporal_smoothing_seconds=temporal_smoothing_seconds,
+            frame_save_seconds=frame_save_seconds,
+            encode_seconds=encode_seconds,
+            cleanup_seconds=cleanup_seconds,
+            total_runtime_seconds=runtime_seconds,
+            process_cpu_seconds=process_cpu_seconds,
+            effective_fps=(frame_count / runtime_seconds) if runtime_seconds > 0 else 0.0,
+            per_frame_seconds=(runtime_seconds / frame_count) if frame_count else 0.0,
+        )
+        if collect_profile
+        else None
+    )
+    return ClipExecutionResult(
+        run_record=record,
+        stage_profile=stage_profile,
+        manifest_path=manifest_path,
+    )
+
+
+def _run_pipe_transport(
+    *,
+    input_path: Path,
+    output_path: Path,
+    media_info: dict[str, str | int | float],
+    config: AppConfig,
+    bundle,
+    postprocess_config: dict,
+    collect_profile: bool,
+) -> tuple[int, float, float, float, float, float, float, float]:
+    width = int(media_info["width"])
+    height = int(media_info["height"])
+    frame_bytes = width * height * 3
+    previous_smoothed_frame: np.ndarray | None = None
+    frame_count = 0
+    frame_decode_seconds = 0.0
+    inference_preprocess_seconds = 0.0
+    inference_model_seconds = 0.0
+    inference_postprocess_seconds = 0.0
+    temporal_smoothing_seconds = 0.0
+    frame_save_seconds = 0.0
+
+    reader = open_rawvideo_reader(input_path=input_path)
+    writer = open_rawvideo_writer(
+        output_path=output_path,
+        width=width,
+        height=height,
+        fps=str(media_info["fps"]),
+        video_codec=str(config.raw["video"]["output_codec"]),
+        crf=int(config.raw["video"]["crf"]),
+        pixel_format=str(config.raw["video"]["pixel_format"]),
+        audio_input_path=input_path,
+    )
+    if reader.stdout is None or reader.stderr is None:
+        raise RuntimeError("ffmpeg rawvideo reader failed to expose stdout/stderr pipes.")
+    if writer.stdin is None or writer.stderr is None:
+        raise RuntimeError("ffmpeg rawvideo writer failed to expose stdin/stderr pipes.")
+
+    try:
+        while True:
             frame_decode_started = time.perf_counter()
-            input_image = Image.open(frame_path).convert("RGB")
+            frame_data = _read_exact(reader.stdout, frame_bytes)
             frame_decode_seconds += time.perf_counter() - frame_decode_started
+            if frame_data is None:
+                break
+
+            input_image = Image.fromarray(
+                np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3)),
+                mode="RGB",
+            )
             if collect_profile:
                 result, inference_profile = colorize_pil_image_profiled(
                     model_bundle=bundle,
@@ -179,74 +349,51 @@ def run_colorize_clip_profiled(
             else:
                 previous_smoothed_frame = result_np
 
-            frame_save_started = time.perf_counter()
-            Image.fromarray(result_np).save(colorized_frames_dir / frame_path.name)
-            frame_save_seconds += time.perf_counter() - frame_save_started
+            frame_write_started = time.perf_counter()
+            writer.stdin.write(result_np.tobytes())
+            frame_save_seconds += time.perf_counter() - frame_write_started
+            frame_count += 1
 
+        writer.stdin.close()
         encode_started = time.perf_counter()
-        encode_video_from_frames(
-            frame_dir=colorized_frames_dir,
-            output_path=output_path,
-            fps=str(media_info["fps"]),
-            video_codec=str(config.raw["video"]["output_codec"]),
-            crf=int(config.raw["video"]["crf"]),
-            pixel_format=str(config.raw["video"]["pixel_format"]),
-            audio_input_path=input_path,
-        )
+        writer_returncode = writer.wait()
         encode_seconds = time.perf_counter() - encode_started
-        runtime_seconds = time.perf_counter() - started
+        reader_returncode = reader.wait()
     finally:
-        cleanup_started = time.perf_counter()
-        if cleanup_frames and frame_root.exists():
-            shutil.rmtree(frame_root, ignore_errors=True)
-        cleanup_seconds = time.perf_counter() - cleanup_started
-    process_cpu_seconds = time.process_time() - process_cpu_started
+        if reader.stdout:
+            reader.stdout.close()
+        if writer.stdin:
+            writer.stdin.close()
 
-    record = ClipRunRecord(
-        input_path=str(input_path),
-        output_path=str(output_path),
-        config_path=str(config_path.resolve()),
-        render_factor=int(config.model["render_factor"]),
-        backend=bundle.backend,
-        runtime_seconds=runtime_seconds,
-        frame_count=len(frame_paths),
-        fps=str(media_info["fps"]),
-        width=int(media_info["width"]),
-        height=int(media_info["height"]),
-        status="succeeded",
+    if reader_returncode != 0:
+        raise RuntimeError(f"ffmpeg rawvideo reader failed: {reader.stderr.read().decode().strip()}")
+    if writer_returncode != 0:
+        raise RuntimeError(f"ffmpeg rawvideo writer failed: {writer.stderr.read().decode().strip()}")
+
+    return (
+        frame_count,
+        frame_decode_seconds,
+        inference_preprocess_seconds,
+        inference_model_seconds,
+        inference_postprocess_seconds,
+        temporal_smoothing_seconds,
+        frame_save_seconds,
+        encode_seconds,
     )
 
-    manifest_path = (
-        manifest_path.expanduser().resolve()
-        if manifest_path is not None
-        else paths.manifest_dir / "probe_runs.json"
-    )
-    update_probe_runs_manifest(manifest_path, record)
-    stage_profile = (
-        ClipStageProfile(
-            model_load_seconds=model_load_seconds,
-            frame_extract_seconds=frame_extract_seconds,
-            frame_decode_seconds=frame_decode_seconds,
-            inference_preprocess_seconds=inference_preprocess_seconds,
-            inference_model_seconds=inference_model_seconds,
-            inference_postprocess_seconds=inference_postprocess_seconds,
-            temporal_smoothing_seconds=temporal_smoothing_seconds,
-            frame_save_seconds=frame_save_seconds,
-            encode_seconds=encode_seconds,
-            cleanup_seconds=cleanup_seconds,
-            total_runtime_seconds=runtime_seconds,
-            process_cpu_seconds=process_cpu_seconds,
-            effective_fps=(len(frame_paths) / runtime_seconds) if runtime_seconds > 0 else 0.0,
-            per_frame_seconds=(runtime_seconds / len(frame_paths)) if frame_paths else 0.0,
-        )
-        if collect_profile
-        else None
-    )
-    return ClipExecutionResult(
-        run_record=record,
-        stage_profile=stage_profile,
-        manifest_path=manifest_path,
-    )
+
+def _read_exact(stream, size: int) -> bytes | None:
+    buffer = bytearray()
+    while len(buffer) < size:
+        chunk = stream.read(size - len(buffer))
+        if not chunk:
+            if not buffer:
+                return None
+            raise RuntimeError(
+                f"Unexpected end of rawvideo stream; expected {size} bytes, got {len(buffer)}."
+            )
+        buffer.extend(chunk)
+    return bytes(buffer)
 
 
 def update_probe_runs_manifest(manifest_path: Path, record: ClipRunRecord) -> None:

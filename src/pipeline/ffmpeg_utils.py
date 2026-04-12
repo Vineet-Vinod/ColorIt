@@ -151,6 +151,82 @@ def extract_frames(
     _run(command)
 
 
+def open_rawvideo_reader(
+    *,
+    input_path: Path,
+) -> subprocess.Popen[bytes]:
+    command = [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-nostdin",
+        "-i",
+        str(input_path),
+        "-an",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-",
+    ]
+    return subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def open_rawvideo_writer(
+    *,
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: str,
+    video_codec: str,
+    crf: int,
+    pixel_format: str,
+    audio_input_path: Path | None = None,
+) -> subprocess.Popen[bytes]:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-nostdin",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{width}x{height}",
+        "-r",
+        fps_to_decimal_string(fps),
+        "-i",
+        "-",
+    ]
+    if audio_input_path is not None:
+        command.extend(["-i", str(audio_input_path), "-map", "0:v:0", "-map", "1:a:0?"])
+    command.extend(
+        [
+            "-c:v",
+            video_codec,
+            "-crf",
+            str(crf),
+            "-pix_fmt",
+            pixel_format,
+        ]
+    )
+    if audio_input_path is not None:
+        command.extend(["-c:a", "aac", "-b:a", "192k", "-shortest"])
+    command.append(str(output_path))
+    return subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
 def encode_video_from_frames(
     *,
     frame_dir: Path,

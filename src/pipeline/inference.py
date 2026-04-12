@@ -7,6 +7,7 @@ import time
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image
 
 from src.pipeline.model_loader import IMAGENET_MEAN, IMAGENET_STD, ModelBundle
@@ -110,18 +111,17 @@ def colorize_rgb_frame_profiled(
 
     model_started = time.perf_counter()
     with torch.no_grad():
-        output = model_bundle.model(tensor)[0].cpu()
+        output = model_bundle.model(tensor)[0]
     model_seconds = time.perf_counter() - model_started
 
     postprocess_started = time.perf_counter()
-    output = (output * IMAGENET_STD) + IMAGENET_MEAN
+    output = (output * IMAGENET_STD.to(output.device)) + IMAGENET_MEAN.to(output.device)
     output = output.clamp(0.0, 1.0)
-    colorized_square = (output.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-    colorized = cv2.resize(colorized_square, (input_width, input_height), interpolation=cv2.INTER_LINEAR)
-    result = _post_process_np(
-        raw_color_np=colorized,
+    result = _post_process_tensor(
+        raw_color_tensor=output,
         orig_np=input_rgb,
-        postprocess_config=postprocess_config,
+        output_size=(input_height, input_width),
+        postprocess_config=postprocess_config or {},
     )
     postprocess_seconds = time.perf_counter() - postprocess_started
     return result, InferenceProfile(
@@ -157,6 +157,55 @@ def _post_process_np(
     hires[:, :, 1:3] = color_yuv[:, :, 1:3]
     final = cv2.cvtColor(hires, cv2.COLOR_YUV2RGB)
     return _apply_color_bias(final, postprocess_config or {})
+
+
+def _post_process_tensor(
+    *,
+    raw_color_tensor: torch.Tensor,
+    orig_np: np.ndarray,
+    output_size: tuple[int, int],
+    postprocess_config: dict,
+) -> np.ndarray:
+    upsampled = F.interpolate(
+        raw_color_tensor.unsqueeze(0),
+        size=output_size,
+        mode="bilinear",
+        align_corners=False,
+    )[0]
+
+    orig_tensor = (
+        torch.from_numpy(np.array(orig_np, copy=True))
+        .to(raw_color_tensor.device)
+        .permute(2, 0, 1)
+        .float()
+        / 255.0
+    )
+
+    final_tensor = _transfer_chroma_tensor(orig_tensor=orig_tensor, color_tensor=upsampled)
+    final_np = (final_tensor.clamp(0.0, 1.0).permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
+
+    warmth = float(postprocess_config.get("warmth", 0.0))
+    shadow_warmth = float(postprocess_config.get("shadow_warmth", 0.0))
+    blue_reduction = float(postprocess_config.get("blue_reduction", 0.0))
+    if warmth == 0.0 and shadow_warmth == 0.0 and blue_reduction == 0.0:
+        return final_np
+    return _apply_color_bias(final_np, postprocess_config)
+
+
+def _transfer_chroma_tensor(
+    *,
+    orig_tensor: torch.Tensor,
+    color_tensor: torch.Tensor,
+) -> torch.Tensor:
+    y = 0.299 * orig_tensor[0] + 0.587 * orig_tensor[1] + 0.114 * orig_tensor[2]
+    u = -0.14713 * color_tensor[0] - 0.28886 * color_tensor[1] + 0.436 * color_tensor[2]
+    v = 0.615 * color_tensor[0] - 0.51499 * color_tensor[1] - 0.10001 * color_tensor[2]
+
+    rgb = torch.empty_like(orig_tensor)
+    rgb[0] = y + 1.13983 * v
+    rgb[1] = y - 0.39465 * u - 0.58060 * v
+    rgb[2] = y + 2.03211 * u
+    return rgb
 
 
 def _apply_color_bias(image_rgb: np.ndarray, postprocess_config: dict) -> np.ndarray:

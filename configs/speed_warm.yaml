@@ -9,6 +9,7 @@ runtime:
   fallback_backend: cpu
   num_workers: 1
   deterministic: true
+  frame_transport: pipe
 
 video:
   preserve_fps: true

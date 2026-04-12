@@ -18,7 +18,12 @@ from src.pipeline.ffmpeg_utils import (
     open_rawvideo_reader,
     open_rawvideo_writer,
 )
-from src.pipeline.inference import colorize_pil_image, colorize_pil_image_profiled
+from src.pipeline.inference import (
+    colorize_pil_image,
+    colorize_pil_image_profiled,
+    colorize_rgb_frame,
+    colorize_rgb_frame_profiled,
+)
 from src.pipeline.manifest import write_json_manifest
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
@@ -314,14 +319,11 @@ def _run_pipe_transport(
             if frame_data is None:
                 break
 
-            input_image = Image.fromarray(
-                np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3)),
-                mode="RGB",
-            )
+            input_rgb = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
             if collect_profile:
-                result, inference_profile = colorize_pil_image_profiled(
+                result_np, inference_profile = colorize_rgb_frame_profiled(
                     model_bundle=bundle,
-                    input_image=input_image,
+                    input_rgb=input_rgb,
                     render_factor=int(config.model["render_factor"]),
                     postprocess_config=postprocess_config,
                 )
@@ -329,13 +331,12 @@ def _run_pipe_transport(
                 inference_model_seconds += inference_profile.model_seconds
                 inference_postprocess_seconds += inference_profile.postprocess_seconds
             else:
-                result = colorize_pil_image(
+                result_np = colorize_rgb_frame(
                     model_bundle=bundle,
-                    input_image=input_image,
+                    input_rgb=input_rgb,
                     render_factor=int(config.model["render_factor"]),
                     postprocess_config=postprocess_config,
                 )
-            result_np = np.asarray(result)
             if bool(postprocess_config.get("temporal_smoothing", False)):
                 temporal_started = time.perf_counter()
                 result_np, previous_smoothed_frame = apply_temporal_smoothing(

@@ -38,6 +38,22 @@ def colorize_image_file(
     result.save(output_path)
 
 
+def colorize_rgb_frame(
+    *,
+    model_bundle: ModelBundle,
+    input_rgb: np.ndarray,
+    render_factor: int,
+    postprocess_config: dict | None = None,
+) -> np.ndarray:
+    result, _ = colorize_rgb_frame_profiled(
+        model_bundle=model_bundle,
+        input_rgb=input_rgb,
+        render_factor=render_factor,
+        postprocess_config=postprocess_config,
+    )
+    return result
+
+
 def colorize_pil_image(
     *,
     model_bundle: ModelBundle,
@@ -63,10 +79,31 @@ def colorize_pil_image_profiled(
 ) -> tuple[Image.Image, InferenceProfile]:
     preprocess_started = time.perf_counter()
     render_size = render_factor * 16
-    model_input = input_image.resize((render_size, render_size), resample=Image.BILINEAR)
-    model_input = model_input.convert("LA").convert("RGB")
+    result_np, profile = colorize_rgb_frame_profiled(
+        model_bundle=model_bundle,
+        input_rgb=np.asarray(input_image),
+        render_factor=render_factor,
+        postprocess_config=postprocess_config,
+    )
+    return Image.fromarray(result_np), profile
 
-    tensor = torch.from_numpy(np.array(model_input)).permute(2, 0, 1).float() / 255.0
+
+def colorize_rgb_frame_profiled(
+    *,
+    model_bundle: ModelBundle,
+    input_rgb: np.ndarray,
+    render_factor: int,
+    postprocess_config: dict | None = None,
+) -> tuple[np.ndarray, InferenceProfile]:
+    preprocess_started = time.perf_counter()
+    input_rgb = np.ascontiguousarray(input_rgb)
+    input_height, input_width = input_rgb.shape[:2]
+    render_size = render_factor * 16
+    model_input = cv2.resize(input_rgb, (render_size, render_size), interpolation=cv2.INTER_LINEAR)
+    gray_input = cv2.cvtColor(model_input, cv2.COLOR_RGB2GRAY)
+    model_input = cv2.cvtColor(gray_input, cv2.COLOR_GRAY2RGB)
+
+    tensor = torch.from_numpy(model_input).permute(2, 0, 1).float() / 255.0
     tensor = (tensor - IMAGENET_MEAN) / IMAGENET_STD
     tensor = tensor.unsqueeze(0).to(model_bundle.device)
     preprocess_seconds = time.perf_counter() - preprocess_started
@@ -79,11 +116,11 @@ def colorize_pil_image_profiled(
     postprocess_started = time.perf_counter()
     output = (output * IMAGENET_STD) + IMAGENET_MEAN
     output = output.clamp(0.0, 1.0)
-    colorized_square = Image.fromarray((output.permute(1, 2, 0).numpy() * 255).astype(np.uint8))
-    colorized = colorized_square.resize(input_image.size, resample=Image.BILINEAR)
-    result = _post_process(
-        raw_color=colorized,
-        orig=input_image,
+    colorized_square = (output.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+    colorized = cv2.resize(colorized_square, (input_width, input_height), interpolation=cv2.INTER_LINEAR)
+    result = _post_process_np(
+        raw_color_np=colorized,
+        orig_np=input_rgb,
         postprocess_config=postprocess_config,
     )
     postprocess_seconds = time.perf_counter() - postprocess_started
@@ -100,15 +137,26 @@ def _post_process(
     orig: Image.Image,
     postprocess_config: dict | None,
 ) -> Image.Image:
-    color_np = np.asarray(raw_color)
-    orig_np = np.asarray(orig)
-    color_yuv = cv2.cvtColor(color_np, cv2.COLOR_RGB2YUV)
+    adjusted = _post_process_np(
+        raw_color_np=np.asarray(raw_color),
+        orig_np=np.asarray(orig),
+        postprocess_config=postprocess_config,
+    )
+    return Image.fromarray(adjusted)
+
+
+def _post_process_np(
+    *,
+    raw_color_np: np.ndarray,
+    orig_np: np.ndarray,
+    postprocess_config: dict | None,
+) -> np.ndarray:
+    color_yuv = cv2.cvtColor(raw_color_np, cv2.COLOR_RGB2YUV)
     orig_yuv = cv2.cvtColor(orig_np, cv2.COLOR_RGB2YUV)
     hires = np.copy(orig_yuv)
     hires[:, :, 1:3] = color_yuv[:, :, 1:3]
     final = cv2.cvtColor(hires, cv2.COLOR_YUV2RGB)
-    adjusted = _apply_color_bias(final, postprocess_config or {})
-    return Image.fromarray(adjusted)
+    return _apply_color_bias(final, postprocess_config or {})
 
 
 def _apply_color_bias(image_rgb: np.ndarray, postprocess_config: dict) -> np.ndarray:

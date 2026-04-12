@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import dataclass
+import time
 
 import cv2
 import numpy as np
@@ -8,6 +10,13 @@ import torch
 from PIL import Image
 
 from src.pipeline.model_loader import IMAGENET_MEAN, IMAGENET_STD, ModelBundle
+
+
+@dataclass(frozen=True)
+class InferenceProfile:
+    preprocess_seconds: float
+    model_seconds: float
+    postprocess_seconds: float
 
 
 def colorize_image_file(
@@ -36,6 +45,23 @@ def colorize_pil_image(
     render_factor: int,
     postprocess_config: dict | None = None,
 ) -> Image.Image:
+    result, _ = colorize_pil_image_profiled(
+        model_bundle=model_bundle,
+        input_image=input_image,
+        render_factor=render_factor,
+        postprocess_config=postprocess_config,
+    )
+    return result
+
+
+def colorize_pil_image_profiled(
+    *,
+    model_bundle: ModelBundle,
+    input_image: Image.Image,
+    render_factor: int,
+    postprocess_config: dict | None = None,
+) -> tuple[Image.Image, InferenceProfile]:
+    preprocess_started = time.perf_counter()
     render_size = render_factor * 16
     model_input = input_image.resize((render_size, render_size), resample=Image.BILINEAR)
     model_input = model_input.convert("LA").convert("RGB")
@@ -43,18 +69,28 @@ def colorize_pil_image(
     tensor = torch.from_numpy(np.array(model_input)).permute(2, 0, 1).float() / 255.0
     tensor = (tensor - IMAGENET_MEAN) / IMAGENET_STD
     tensor = tensor.unsqueeze(0).to(model_bundle.device)
+    preprocess_seconds = time.perf_counter() - preprocess_started
 
+    model_started = time.perf_counter()
     with torch.no_grad():
         output = model_bundle.model(tensor)[0].cpu()
+    model_seconds = time.perf_counter() - model_started
 
+    postprocess_started = time.perf_counter()
     output = (output * IMAGENET_STD) + IMAGENET_MEAN
     output = output.clamp(0.0, 1.0)
     colorized_square = Image.fromarray((output.permute(1, 2, 0).numpy() * 255).astype(np.uint8))
     colorized = colorized_square.resize(input_image.size, resample=Image.BILINEAR)
-    return _post_process(
+    result = _post_process(
         raw_color=colorized,
         orig=input_image,
         postprocess_config=postprocess_config,
+    )
+    postprocess_seconds = time.perf_counter() - postprocess_started
+    return result, InferenceProfile(
+        preprocess_seconds=preprocess_seconds,
+        model_seconds=model_seconds,
+        postprocess_seconds=postprocess_seconds,
     )
 
 

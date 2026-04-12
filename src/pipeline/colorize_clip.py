@@ -16,7 +16,7 @@ from src.pipeline.ffmpeg_utils import (
     extract_frames,
     ffprobe_media,
 )
-from src.pipeline.inference import colorize_pil_image
+from src.pipeline.inference import colorize_pil_image, colorize_pil_image_profiled
 from src.pipeline.manifest import write_json_manifest
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
@@ -37,6 +37,24 @@ class ClipRunRecord:
     status: str
 
 
+@dataclass(frozen=True)
+class ClipStageProfile:
+    model_load_seconds: float
+    frame_extract_seconds: float
+    frame_decode_seconds: float
+    inference_preprocess_seconds: float
+    inference_model_seconds: float
+    inference_postprocess_seconds: float
+    temporal_smoothing_seconds: float
+    frame_save_seconds: float
+    encode_seconds: float
+    cleanup_seconds: float
+    total_runtime_seconds: float
+    process_cpu_seconds: float
+    effective_fps: float
+    per_frame_seconds: float
+
+
 def run_colorize_clip(
     *,
     config: AppConfig,
@@ -46,6 +64,37 @@ def run_colorize_clip(
     manifest_path: Path | None,
     overwrite: bool,
 ) -> int:
+    result = run_colorize_clip_profiled(
+        config=config,
+        config_path=config_path,
+        input_path=input_path,
+        output_path=output_path,
+        manifest_path=manifest_path,
+        overwrite=overwrite,
+        collect_profile=False,
+    )
+    print(f"Clip colorization succeeded in {result.run_record.runtime_seconds:.2f}s")
+    print(f"Run manifest updated: {result.manifest_path}")
+    return 0
+
+
+@dataclass(frozen=True)
+class ClipExecutionResult:
+    run_record: ClipRunRecord
+    stage_profile: ClipStageProfile | None
+    manifest_path: Path
+
+
+def run_colorize_clip_profiled(
+    *,
+    config: AppConfig,
+    config_path: Path,
+    input_path: Path,
+    output_path: Path,
+    manifest_path: Path | None,
+    overwrite: bool,
+    collect_profile: bool,
+) -> ClipExecutionResult:
     paths = resolve_project_paths(config)
     ensure_runtime_directories(paths)
 
@@ -57,7 +106,10 @@ def run_colorize_clip(
         raise FileExistsError(f"Output already exists: {output_path}. Use --overwrite to replace it.")
 
     media_info = ffprobe_media(input_path)
+    load_started = time.perf_counter()
+    process_cpu_started = time.process_time()
     bundle = load_colorizer_bundle(config)
+    model_load_seconds = time.perf_counter() - load_started
 
     run_hash = sha256(f"{input_path}:{output_path}:{config_path.resolve()}".encode()).hexdigest()[:12]
     frame_root = paths.frames_dir / f"clip_{run_hash}"
@@ -71,8 +123,19 @@ def run_colorize_clip(
 
     started = time.perf_counter()
     cleanup_frames = bool(config.raw.get("runtime", {}).get("cleanup_frames", True))
+    frame_extract_seconds = 0.0
+    frame_decode_seconds = 0.0
+    inference_preprocess_seconds = 0.0
+    inference_model_seconds = 0.0
+    inference_postprocess_seconds = 0.0
+    temporal_smoothing_seconds = 0.0
+    frame_save_seconds = 0.0
+    encode_seconds = 0.0
+    cleanup_seconds = 0.0
     try:
+        extract_started = time.perf_counter()
         extract_frames(input_path=input_path, output_dir=source_frames_dir)
+        frame_extract_seconds = time.perf_counter() - extract_started
 
         frame_paths = sorted(source_frames_dir.glob("*.png"))
         if not frame_paths:
@@ -82,15 +145,29 @@ def run_colorize_clip(
         previous_smoothed_frame: np.ndarray | None = None
         postprocess_config = config.raw["postprocess"]
         for frame_path in frame_paths:
+            frame_decode_started = time.perf_counter()
             input_image = Image.open(frame_path).convert("RGB")
-            result = colorize_pil_image(
-                model_bundle=bundle,
-                input_image=input_image,
-                render_factor=int(config.model["render_factor"]),
-                postprocess_config=postprocess_config,
-            )
+            frame_decode_seconds += time.perf_counter() - frame_decode_started
+            if collect_profile:
+                result, inference_profile = colorize_pil_image_profiled(
+                    model_bundle=bundle,
+                    input_image=input_image,
+                    render_factor=int(config.model["render_factor"]),
+                    postprocess_config=postprocess_config,
+                )
+                inference_preprocess_seconds += inference_profile.preprocess_seconds
+                inference_model_seconds += inference_profile.model_seconds
+                inference_postprocess_seconds += inference_profile.postprocess_seconds
+            else:
+                result = colorize_pil_image(
+                    model_bundle=bundle,
+                    input_image=input_image,
+                    render_factor=int(config.model["render_factor"]),
+                    postprocess_config=postprocess_config,
+                )
             result_np = np.asarray(result)
             if bool(postprocess_config.get("temporal_smoothing", False)):
+                temporal_started = time.perf_counter()
                 result_np, previous_smoothed_frame = apply_temporal_smoothing(
                     current_frame=result_np,
                     previous_frame=previous_smoothed_frame,
@@ -98,11 +175,15 @@ def run_colorize_clip(
                     chroma_threshold=float(postprocess_config.get("smoothing_chroma_threshold", 24.0)),
                     adaptive_boost=float(postprocess_config.get("adaptive_smoothing_boost", 0.0)),
                 )
+                temporal_smoothing_seconds += time.perf_counter() - temporal_started
             else:
                 previous_smoothed_frame = result_np
 
+            frame_save_started = time.perf_counter()
             Image.fromarray(result_np).save(colorized_frames_dir / frame_path.name)
+            frame_save_seconds += time.perf_counter() - frame_save_started
 
+        encode_started = time.perf_counter()
         encode_video_from_frames(
             frame_dir=colorized_frames_dir,
             output_path=output_path,
@@ -112,10 +193,14 @@ def run_colorize_clip(
             pixel_format=str(config.raw["video"]["pixel_format"]),
             audio_input_path=input_path,
         )
+        encode_seconds = time.perf_counter() - encode_started
         runtime_seconds = time.perf_counter() - started
     finally:
+        cleanup_started = time.perf_counter()
         if cleanup_frames and frame_root.exists():
             shutil.rmtree(frame_root, ignore_errors=True)
+        cleanup_seconds = time.perf_counter() - cleanup_started
+    process_cpu_seconds = time.process_time() - process_cpu_started
 
     record = ClipRunRecord(
         input_path=str(input_path),
@@ -137,9 +222,31 @@ def run_colorize_clip(
         else paths.manifest_dir / "probe_runs.json"
     )
     update_probe_runs_manifest(manifest_path, record)
-    print(f"Clip colorization succeeded in {runtime_seconds:.2f}s")
-    print(f"Run manifest updated: {manifest_path}")
-    return 0
+    stage_profile = (
+        ClipStageProfile(
+            model_load_seconds=model_load_seconds,
+            frame_extract_seconds=frame_extract_seconds,
+            frame_decode_seconds=frame_decode_seconds,
+            inference_preprocess_seconds=inference_preprocess_seconds,
+            inference_model_seconds=inference_model_seconds,
+            inference_postprocess_seconds=inference_postprocess_seconds,
+            temporal_smoothing_seconds=temporal_smoothing_seconds,
+            frame_save_seconds=frame_save_seconds,
+            encode_seconds=encode_seconds,
+            cleanup_seconds=cleanup_seconds,
+            total_runtime_seconds=runtime_seconds,
+            process_cpu_seconds=process_cpu_seconds,
+            effective_fps=(len(frame_paths) / runtime_seconds) if runtime_seconds > 0 else 0.0,
+            per_frame_seconds=(runtime_seconds / len(frame_paths)) if frame_paths else 0.0,
+        )
+        if collect_profile
+        else None
+    )
+    return ClipExecutionResult(
+        run_record=record,
+        stage_profile=stage_profile,
+        manifest_path=manifest_path,
+    )
 
 
 def update_probe_runs_manifest(manifest_path: Path, record: ClipRunRecord) -> None:

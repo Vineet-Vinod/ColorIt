@@ -40,6 +40,7 @@ uv run colorit detect-scenes --movie ~/Movies/Kannada/'emme thammanna.mp4' --out
 uv run colorit colorize-batch --movie ~/Movies/Kannada/'emme thammanna.mp4' --scene-manifest data/manifests/scenes_t060.json --config configs/full_movie.yaml --resume
 uv run colorit assemble-final --scene-manifest data/manifests/scenes_t060.json --config configs/full_movie.yaml
 uv run colorit compress-final --config configs/full_movie.yaml --input data/final/emme_thammanna_colorized_v1.mp4
+uv run colorit benchmark-clips --config configs/quality.yaml --input data/probe_clips/clip_02.mp4 --input data/probe_clips/clip_04.mp4
 ```
 
 By default, `download-weights` fetches:
@@ -184,6 +185,36 @@ By default this writes:
 - input: `data/final/emme_thammanna_colorized_v1.mp4`
 - output: `data/final/emme_thammanna_colorized_v1_crf22_slow.mp4`
 - manifest: `data/manifests/compression_emme_thammanna_colorized_v1.json`
+
+## Performance Benchmarking
+
+Benchmark the current clip pipeline with:
+
+```bash
+uv run colorit benchmark-clips \
+  --config configs/quality.yaml \
+  --input data/probe_clips/clip_02.mp4 \
+  --input data/probe_clips/clip_04.mp4 \
+  --input data/probe_clips/clip_06.mp4 \
+  --input data/probe_clips/clip_10.mp4 \
+  --overwrite
+```
+
+The benchmark manifest is written to `data/manifests/benchmark_runs.json`.
+
+Current baseline findings on representative probe clips:
+
+- effective throughput is about `8 fps` on `mps`
+- model inference is about `37-38%` of clip runtime
+- PNG frame saves are about `35-39%` of clip runtime
+- PNG frame decode is about `7-9%`
+- ffmpeg extract + encode is relatively small
+- sampled GPU device utilization averaged about `79-82%`
+
+Implication:
+
+- the first optimization target is pipeline I/O reduction, not custom shaders
+- removing PNG round-trips should be evaluated before backend-specific compute work
 
 ### Safety boundary
 

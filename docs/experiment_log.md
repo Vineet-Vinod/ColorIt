@@ -61,3 +61,29 @@ Validation completed:
 
 - `compress-final` on `scenes_t060_first2.mp4`
 - full-movie review copy generated at `emme_thammanna_colorized_v1_crf22_slow.mp4`
+
+## Performance
+
+Baseline benchmark command:
+
+- `benchmark-clips` on `clip_02`, `clip_04`, `clip_06`, and `clip_10` with `configs/quality.yaml`
+
+Observed baseline:
+
+- throughput: about `7.9-8.2 fps`
+- GPU utilization average: about `79-82%`
+- process CPU average: about `81-82%`
+
+Dominant stage costs:
+
+- model inference: about `37-38%`
+- PNG frame save: about `35-39%`
+- PNG frame decode: about `7-9%`
+- postprocess: about `7-8%`
+- ffmpeg encode: about `2-3%`
+
+Implication:
+
+- the current v1 pipeline is not purely model-bound
+- shader work is not the first justified optimization
+- the next perf experiment should remove the PNG round-trip and re-benchmark

@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from src.pipeline.assemble import run_assemble_final
+from src.pipeline.benchmark import run_benchmark_clips
 from src.pipeline.bootstrap import run_verify_env
 from src.pipeline.batch import run_colorize_batch
 from src.pipeline.colorize_clip import run_colorize_clip
@@ -226,6 +227,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compress_parser.set_defaults(handler=handle_compress_final)
 
+    benchmark_parser = subparsers.add_parser(
+        "benchmark-clips",
+        help="Profile representative clip runs and record stage timings plus resource samples.",
+    )
+    benchmark_parser.add_argument("--config", default="configs/quality.yaml")
+    benchmark_parser.add_argument(
+        "--input",
+        action="append",
+        default=[],
+        help="Input clip path. Repeat for multiple clips.",
+    )
+    benchmark_parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Optional output directory for benchmark renders.",
+    )
+    benchmark_parser.add_argument(
+        "--manifest-path",
+        default=None,
+        help="Optional benchmark manifest path override.",
+    )
+    benchmark_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing benchmark outputs.",
+    )
+    benchmark_parser.add_argument(
+        "--sample-interval-seconds",
+        type=float,
+        default=1.0,
+        help="Sampling interval for CPU and GPU utilization.",
+    )
+    benchmark_parser.set_defaults(handler=handle_benchmark_clips)
+
     return parser
 
 
@@ -329,6 +364,19 @@ def handle_compress_final(args: argparse.Namespace) -> int:
         config=config,
         input_path=Path(args.input),
         output_path=Path(args.output) if args.output else None,
+    )
+
+
+def handle_benchmark_clips(args: argparse.Namespace) -> int:
+    config = load_config(Path(args.config))
+    return run_benchmark_clips(
+        config=config,
+        config_path=Path(args.config),
+        input_paths=[Path(value) for value in args.input],
+        output_dir=Path(args.output_dir) if args.output_dir else None,
+        manifest_path=Path(args.manifest_path) if args.manifest_path else None,
+        overwrite=args.overwrite,
+        sample_interval_seconds=args.sample_interval_seconds,
     )
 
 

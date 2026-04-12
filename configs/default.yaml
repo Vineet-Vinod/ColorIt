@@ -10,7 +10,7 @@ runtime:
   num_workers: 1
   deterministic: true
   frame_transport: pipe
-  inference_batch_size: 2
+  inference_batch_size: 16
   cleanup_frames: true
 
 video:

@@ -164,6 +164,7 @@ def handle_colorize_frame(args: argparse.Namespace) -> int:
         input_path=Path(args.input),
         output_path=Path(args.output),
         render_factor=render_factor,
+        postprocess_config=config.raw["postprocess"],
     )
     print(f"Colorized frame written to {Path(args.output).resolve()}")
     return 0

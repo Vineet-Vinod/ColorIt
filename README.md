@@ -35,6 +35,7 @@ uv run colorit download-weights
 uv run colorit colorize-frame --input input.png --output output.png
 uv run colorit extract-probes --movie ~/Movies/Kannada/'emme thammanna.mp4' --clip clip_01=00:10:00-00:10:15
 uv run colorit colorize-clip --input data/probe_clips/clip_01.mp4 --output data/colorized/probes/clip_01_quality.mp4 --config configs/quality.yaml
+uv run colorit colorize-clip --input data/probe_clips/clip_01.mp4 --output data/colorized/probes/clip_01_quality_warm.mp4 --config configs/quality_warm.yaml
 ```
 
 By default, `download-weights` fetches:
@@ -94,6 +95,16 @@ uv run colorit colorize-clip \
 ```
 
 Each run appends metadata to `data/manifests/probe_runs.json` unless you override the manifest path.
+
+The repository also includes warmed comparison presets:
+
+- `configs/quality_warm.yaml`
+- `configs/speed_warm.yaml`
+- `configs/quality_warm_smooth.yaml`
+- `configs/quality_aggressive.yaml`
+- `configs/quality_aggressive_smooth.yaml`
+
+These apply warm-bias correction, and `quality_warm_smooth.yaml` also adds lightweight temporal chroma smoothing for flicker reduction.
 
 ### Safety boundary
 

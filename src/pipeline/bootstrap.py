@@ -98,6 +98,7 @@ def run_verify_env(
             input_path=frame_input,
             output_path=frame_output,
             render_factor=int(config.model["render_factor"]),
+            postprocess_config=config.raw["postprocess"],
         )
         print(f"Single-frame inference: succeeded ({frame_output})")
     except Exception as exc:

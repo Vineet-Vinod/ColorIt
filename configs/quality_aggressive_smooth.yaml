@@ -23,13 +23,13 @@ scenes:
   overlap_seconds: 1.0
 
 postprocess:
-  temporal_smoothing: false
-  smoothing_strength: 0.0
-  smoothing_chroma_threshold: 24.0
-  adaptive_smoothing_boost: 0.0
-  warmth: 0.0
-  shadow_warmth: 0.0
-  blue_reduction: 0.0
+  temporal_smoothing: true
+  smoothing_strength: 0.42
+  smoothing_chroma_threshold: 16.0
+  adaptive_smoothing_boost: 0.35
+  warmth: 0.95
+  shadow_warmth: 0.80
+  blue_reduction: 0.90
 
 paths:
   source_dir: data/source

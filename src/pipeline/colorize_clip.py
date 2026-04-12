@@ -5,6 +5,8 @@ from hashlib import sha256
 from pathlib import Path
 import time
 
+import cv2
+import numpy as np
 from PIL import Image
 
 from src.pipeline.config import AppConfig
@@ -74,14 +76,29 @@ def run_colorize_clip(
         raise RuntimeError("No frames were extracted from the input clip.")
 
     colorized_frames_dir.mkdir(parents=True, exist_ok=True)
+    previous_smoothed_frame: np.ndarray | None = None
+    postprocess_config = config.raw["postprocess"]
     for frame_path in frame_paths:
         input_image = Image.open(frame_path).convert("RGB")
         result = colorize_pil_image(
             model_bundle=bundle,
             input_image=input_image,
             render_factor=int(config.model["render_factor"]),
+            postprocess_config=postprocess_config,
         )
-        result.save(colorized_frames_dir / frame_path.name)
+        result_np = np.asarray(result)
+        if bool(postprocess_config.get("temporal_smoothing", False)):
+            result_np, previous_smoothed_frame = apply_temporal_smoothing(
+                current_frame=result_np,
+                previous_frame=previous_smoothed_frame,
+                strength=float(postprocess_config.get("smoothing_strength", 0.0)),
+                chroma_threshold=float(postprocess_config.get("smoothing_chroma_threshold", 24.0)),
+                adaptive_boost=float(postprocess_config.get("adaptive_smoothing_boost", 0.0)),
+            )
+        else:
+            previous_smoothed_frame = result_np
+
+        Image.fromarray(result_np).save(colorized_frames_dir / frame_path.name)
 
     encode_video_from_frames(
         frame_dir=colorized_frames_dir,
@@ -129,3 +146,36 @@ def update_probe_runs_manifest(manifest_path: Path, record: ClipRunRecord) -> No
 
     payload.setdefault("runs", []).append(asdict(record))
     write_json_manifest(manifest_path, payload)
+
+
+def apply_temporal_smoothing(
+    *,
+    current_frame: np.ndarray,
+    previous_frame: np.ndarray | None,
+    strength: float,
+    chroma_threshold: float = 24.0,
+    adaptive_boost: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    strength = float(np.clip(strength, 0.0, 1.0))
+    if previous_frame is None or strength <= 0.0:
+        return current_frame, current_frame
+
+    current_yuv = cv2.cvtColor(current_frame, cv2.COLOR_RGB2YUV).astype(np.float32)
+    previous_yuv = cv2.cvtColor(previous_frame, cv2.COLOR_RGB2YUV).astype(np.float32)
+
+    smoothed_yuv = current_yuv.copy()
+    chroma_delta = np.abs(current_yuv[:, :, 1:3] - previous_yuv[:, :, 1:3]).mean(axis=2)
+    adaptive_component = np.clip(
+        (chroma_delta - chroma_threshold) / max(1.0, 255.0 - chroma_threshold),
+        0.0,
+        1.0,
+    ) * float(np.clip(adaptive_boost, 0.0, 1.0))
+    blend = np.clip(strength + adaptive_component, 0.0, 0.9)[:, :, None]
+    smoothed_yuv[:, :, 1:3] = (
+        (1.0 - blend) * current_yuv[:, :, 1:3] + blend * previous_yuv[:, :, 1:3]
+    )
+    smoothed_rgb = cv2.cvtColor(
+        np.clip(smoothed_yuv, 0.0, 255.0).astype(np.uint8),
+        cv2.COLOR_YUV2RGB,
+    )
+    return smoothed_rgb, smoothed_rgb

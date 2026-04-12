@@ -105,6 +105,36 @@ def get_media_duration_seconds(path: Path) -> float:
     return float(result.stdout.strip())
 
 
+def detect_scene_change_times(*, movie_path: Path, threshold: float) -> list[float]:
+    escaped_path = str(movie_path).replace(",", "\\,")
+    lavfi = f"movie={escaped_path},select=gt(scene\\,{threshold:.4f})"
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        lavfi,
+        "-show_entries",
+        "frame=pts_time",
+        "-of",
+        "csv=p=0",
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ffprobe scene detection failed with code {result.returncode}: {result.stderr.strip()}"
+        )
+
+    change_times: list[float] = []
+    for line in result.stdout.splitlines():
+        value = line.strip().rstrip(",")
+        if not value:
+            continue
+        change_times.append(float(value))
+    return change_times
+
+
 def extract_frames(
     *,
     input_path: Path,
@@ -155,6 +185,28 @@ def encode_video_from_frames(
     if audio_input_path is not None:
         command.extend(["-c:a", "aac", "-b:a", "192k", "-shortest"])
     command.append(str(output_path))
+    _run(command)
+
+
+def concat_videos(
+    *,
+    input_list_path: Path,
+    output_path: Path,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(input_list_path),
+        "-c",
+        "copy",
+        str(output_path),
+    ]
     _run(command)
 
 

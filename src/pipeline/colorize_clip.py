@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
+import shutil
 import time
 
 import cv2
@@ -69,47 +70,52 @@ def run_colorize_clip(
     print(f"Render factor: {config.model['render_factor']}")
 
     started = time.perf_counter()
-    extract_frames(input_path=input_path, output_dir=source_frames_dir)
+    cleanup_frames = bool(config.raw.get("runtime", {}).get("cleanup_frames", True))
+    try:
+        extract_frames(input_path=input_path, output_dir=source_frames_dir)
 
-    frame_paths = sorted(source_frames_dir.glob("*.png"))
-    if not frame_paths:
-        raise RuntimeError("No frames were extracted from the input clip.")
+        frame_paths = sorted(source_frames_dir.glob("*.png"))
+        if not frame_paths:
+            raise RuntimeError("No frames were extracted from the input clip.")
 
-    colorized_frames_dir.mkdir(parents=True, exist_ok=True)
-    previous_smoothed_frame: np.ndarray | None = None
-    postprocess_config = config.raw["postprocess"]
-    for frame_path in frame_paths:
-        input_image = Image.open(frame_path).convert("RGB")
-        result = colorize_pil_image(
-            model_bundle=bundle,
-            input_image=input_image,
-            render_factor=int(config.model["render_factor"]),
-            postprocess_config=postprocess_config,
-        )
-        result_np = np.asarray(result)
-        if bool(postprocess_config.get("temporal_smoothing", False)):
-            result_np, previous_smoothed_frame = apply_temporal_smoothing(
-                current_frame=result_np,
-                previous_frame=previous_smoothed_frame,
-                strength=float(postprocess_config.get("smoothing_strength", 0.0)),
-                chroma_threshold=float(postprocess_config.get("smoothing_chroma_threshold", 24.0)),
-                adaptive_boost=float(postprocess_config.get("adaptive_smoothing_boost", 0.0)),
+        colorized_frames_dir.mkdir(parents=True, exist_ok=True)
+        previous_smoothed_frame: np.ndarray | None = None
+        postprocess_config = config.raw["postprocess"]
+        for frame_path in frame_paths:
+            input_image = Image.open(frame_path).convert("RGB")
+            result = colorize_pil_image(
+                model_bundle=bundle,
+                input_image=input_image,
+                render_factor=int(config.model["render_factor"]),
+                postprocess_config=postprocess_config,
             )
-        else:
-            previous_smoothed_frame = result_np
+            result_np = np.asarray(result)
+            if bool(postprocess_config.get("temporal_smoothing", False)):
+                result_np, previous_smoothed_frame = apply_temporal_smoothing(
+                    current_frame=result_np,
+                    previous_frame=previous_smoothed_frame,
+                    strength=float(postprocess_config.get("smoothing_strength", 0.0)),
+                    chroma_threshold=float(postprocess_config.get("smoothing_chroma_threshold", 24.0)),
+                    adaptive_boost=float(postprocess_config.get("adaptive_smoothing_boost", 0.0)),
+                )
+            else:
+                previous_smoothed_frame = result_np
 
-        Image.fromarray(result_np).save(colorized_frames_dir / frame_path.name)
+            Image.fromarray(result_np).save(colorized_frames_dir / frame_path.name)
 
-    encode_video_from_frames(
-        frame_dir=colorized_frames_dir,
-        output_path=output_path,
-        fps=str(media_info["fps"]),
-        video_codec=str(config.raw["video"]["output_codec"]),
-        crf=int(config.raw["video"]["crf"]),
-        pixel_format=str(config.raw["video"]["pixel_format"]),
-        audio_input_path=input_path,
-    )
-    runtime_seconds = time.perf_counter() - started
+        encode_video_from_frames(
+            frame_dir=colorized_frames_dir,
+            output_path=output_path,
+            fps=str(media_info["fps"]),
+            video_codec=str(config.raw["video"]["output_codec"]),
+            crf=int(config.raw["video"]["crf"]),
+            pixel_format=str(config.raw["video"]["pixel_format"]),
+            audio_input_path=input_path,
+        )
+        runtime_seconds = time.perf_counter() - started
+    finally:
+        if cleanup_frames and frame_root.exists():
+            shutil.rmtree(frame_root, ignore_errors=True)
 
     record = ClipRunRecord(
         input_path=str(input_path),

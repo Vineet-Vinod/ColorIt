@@ -10,6 +10,7 @@ from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import AppConfig
 from src.pipeline.ffmpeg_utils import extract_clip
 from src.pipeline.manifest import write_json_manifest
+from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 from src.pipeline.scenes import load_scene_manifest
 
@@ -74,6 +75,8 @@ def run_colorize_batch(
     print(f"Scene manifest: {scene_manifest_path}")
     print(f"Batch scene count: {len(scenes)}")
     print(f"Resume mode: {resume}")
+    print("Loading colorizer model once for batch reuse...")
+    shared_bundle = load_colorizer_bundle(config)
 
     for scene in scenes:
         scene_id = scene["scene_id"]
@@ -105,6 +108,7 @@ def run_colorize_batch(
                 output_path=colorized_clip_path,
                 manifest_path=scene_runs_manifest_path,
                 overwrite=True,
+                model_bundle=shared_bundle,
             )
             succeeded += 1
             status = BatchSceneStatus(

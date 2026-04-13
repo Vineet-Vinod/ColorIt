@@ -27,7 +27,7 @@ from src.pipeline.inference import (
     colorize_rgb_frame_profiled,
 )
 from src.pipeline.manifest import write_json_manifest
-from src.pipeline.model_loader import load_colorizer_bundle
+from src.pipeline.model_loader import ModelBundle, load_colorizer_bundle
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 
 
@@ -78,6 +78,7 @@ def run_colorize_clip(
     output_path: Path,
     manifest_path: Path | None,
     overwrite: bool,
+    model_bundle: ModelBundle | None = None,
 ) -> int:
     result = run_colorize_clip_profiled(
         config=config,
@@ -87,6 +88,7 @@ def run_colorize_clip(
         manifest_path=manifest_path,
         overwrite=overwrite,
         collect_profile=False,
+        model_bundle=model_bundle,
     )
     print(f"Clip colorization succeeded in {result.run_record.runtime_seconds:.2f}s")
     print(f"Run manifest updated: {result.manifest_path}")
@@ -109,6 +111,7 @@ def run_colorize_clip_profiled(
     manifest_path: Path | None,
     overwrite: bool,
     collect_profile: bool,
+    model_bundle: ModelBundle | None = None,
 ) -> ClipExecutionResult:
     paths = resolve_project_paths(config)
     ensure_runtime_directories(paths)
@@ -123,8 +126,12 @@ def run_colorize_clip_profiled(
     media_info = ffprobe_media(input_path)
     load_started = time.perf_counter()
     process_cpu_started = time.process_time()
-    bundle = load_colorizer_bundle(config)
-    model_load_seconds = time.perf_counter() - load_started
+    if model_bundle is None:
+        bundle = load_colorizer_bundle(config)
+        model_load_seconds = time.perf_counter() - load_started
+    else:
+        bundle = model_bundle
+        model_load_seconds = 0.0
     frame_transport = str(config.raw.get("runtime", {}).get("frame_transport", "png")).lower()
 
     run_hash = sha256(f"{input_path}:{output_path}:{config_path.resolve()}".encode()).hexdigest()[:12]

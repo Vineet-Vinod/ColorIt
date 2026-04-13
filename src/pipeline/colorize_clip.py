@@ -53,8 +53,13 @@ class ClipStageProfile:
     frame_extract_seconds: float
     frame_decode_seconds: float
     inference_preprocess_seconds: float
+    inference_preprocess_upload_seconds: float
     inference_model_seconds: float
     inference_postprocess_seconds: float
+    inference_postprocess_upload_seconds: float
+    inference_postprocess_graph_seconds: float
+    inference_postprocess_download_seconds: float
+    inference_postprocess_cpu_seconds: float
     temporal_smoothing_seconds: float
     frame_save_seconds: float
     encode_seconds: float
@@ -138,8 +143,13 @@ def run_colorize_clip_profiled(
     frame_extract_seconds = 0.0
     frame_decode_seconds = 0.0
     inference_preprocess_seconds = 0.0
+    inference_preprocess_upload_seconds = 0.0
     inference_model_seconds = 0.0
     inference_postprocess_seconds = 0.0
+    inference_postprocess_upload_seconds = 0.0
+    inference_postprocess_graph_seconds = 0.0
+    inference_postprocess_download_seconds = 0.0
+    inference_postprocess_cpu_seconds = 0.0
     temporal_smoothing_seconds = 0.0
     frame_save_seconds = 0.0
     encode_seconds = 0.0
@@ -149,7 +159,21 @@ def run_colorize_clip_profiled(
         previous_smoothed_frame: np.ndarray | None = None
         postprocess_config = config.raw["postprocess"]
         if frame_transport == "pipe":
-            frame_count, frame_decode_seconds, inference_preprocess_seconds, inference_model_seconds, inference_postprocess_seconds, temporal_smoothing_seconds, frame_save_seconds, encode_seconds = _run_pipe_transport(
+            (
+                frame_count,
+                frame_decode_seconds,
+                inference_preprocess_seconds,
+                inference_preprocess_upload_seconds,
+                inference_model_seconds,
+                inference_postprocess_seconds,
+                inference_postprocess_upload_seconds,
+                inference_postprocess_graph_seconds,
+                inference_postprocess_download_seconds,
+                inference_postprocess_cpu_seconds,
+                temporal_smoothing_seconds,
+                frame_save_seconds,
+                encode_seconds,
+            ) = _run_pipe_transport(
                 input_path=input_path,
                 output_path=output_path,
                 media_info=media_info,
@@ -181,8 +205,13 @@ def run_colorize_clip_profiled(
                         postprocess_config=postprocess_config,
                     )
                     inference_preprocess_seconds += inference_profile.preprocess_seconds
+                    inference_preprocess_upload_seconds += inference_profile.preprocess_upload_seconds
                     inference_model_seconds += inference_profile.model_seconds
                     inference_postprocess_seconds += inference_profile.postprocess_seconds
+                    inference_postprocess_upload_seconds += inference_profile.postprocess_upload_seconds
+                    inference_postprocess_graph_seconds += inference_profile.postprocess_graph_seconds
+                    inference_postprocess_download_seconds += inference_profile.postprocess_download_seconds
+                    inference_postprocess_cpu_seconds += inference_profile.postprocess_cpu_seconds
                 else:
                     result = colorize_pil_image(
                         model_bundle=bundle,
@@ -254,8 +283,13 @@ def run_colorize_clip_profiled(
             frame_extract_seconds=frame_extract_seconds,
             frame_decode_seconds=frame_decode_seconds,
             inference_preprocess_seconds=inference_preprocess_seconds,
+            inference_preprocess_upload_seconds=inference_preprocess_upload_seconds,
             inference_model_seconds=inference_model_seconds,
             inference_postprocess_seconds=inference_postprocess_seconds,
+            inference_postprocess_upload_seconds=inference_postprocess_upload_seconds,
+            inference_postprocess_graph_seconds=inference_postprocess_graph_seconds,
+            inference_postprocess_download_seconds=inference_postprocess_download_seconds,
+            inference_postprocess_cpu_seconds=inference_postprocess_cpu_seconds,
             temporal_smoothing_seconds=temporal_smoothing_seconds,
             frame_save_seconds=frame_save_seconds,
             encode_seconds=encode_seconds,
@@ -284,7 +318,7 @@ def _run_pipe_transport(
     bundle,
     postprocess_config: dict,
     collect_profile: bool,
-) -> tuple[int, float, float, float, float, float, float, float]:
+) -> tuple[int, float, float, float, float, float, float, float, float, float, float, float, float]:
     width = int(media_info["width"])
     height = int(media_info["height"])
     frame_bytes = width * height * 3
@@ -292,8 +326,13 @@ def _run_pipe_transport(
     frame_count = 0
     frame_decode_seconds = 0.0
     inference_preprocess_seconds = 0.0
+    inference_preprocess_upload_seconds = 0.0
     inference_model_seconds = 0.0
     inference_postprocess_seconds = 0.0
+    inference_postprocess_upload_seconds = 0.0
+    inference_postprocess_graph_seconds = 0.0
+    inference_postprocess_download_seconds = 0.0
+    inference_postprocess_cpu_seconds = 0.0
     temporal_smoothing_seconds = 0.0
     frame_save_seconds = 0.0
 
@@ -337,8 +376,13 @@ def _run_pipe_transport(
                     postprocess_config=postprocess_config,
                 )
                 inference_preprocess_seconds += inference_profile.preprocess_seconds
+                inference_preprocess_upload_seconds += inference_profile.preprocess_upload_seconds
                 inference_model_seconds += inference_profile.model_seconds
                 inference_postprocess_seconds += inference_profile.postprocess_seconds
+                inference_postprocess_upload_seconds += inference_profile.postprocess_upload_seconds
+                inference_postprocess_graph_seconds += inference_profile.postprocess_graph_seconds
+                inference_postprocess_download_seconds += inference_profile.postprocess_download_seconds
+                inference_postprocess_cpu_seconds += inference_profile.postprocess_cpu_seconds
             else:
                 result_batch = colorize_rgb_batch(
                     model_bundle=bundle,
@@ -385,8 +429,13 @@ def _run_pipe_transport(
         frame_count,
         frame_decode_seconds,
         inference_preprocess_seconds,
+        inference_preprocess_upload_seconds,
         inference_model_seconds,
         inference_postprocess_seconds,
+        inference_postprocess_upload_seconds,
+        inference_postprocess_graph_seconds,
+        inference_postprocess_download_seconds,
+        inference_postprocess_cpu_seconds,
         temporal_smoothing_seconds,
         frame_save_seconds,
         encode_seconds,

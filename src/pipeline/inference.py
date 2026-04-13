@@ -18,6 +18,11 @@ class InferenceProfile:
     preprocess_seconds: float
     model_seconds: float
     postprocess_seconds: float
+    preprocess_upload_seconds: float = 0.0
+    postprocess_upload_seconds: float = 0.0
+    postprocess_graph_seconds: float = 0.0
+    postprocess_download_seconds: float = 0.0
+    postprocess_cpu_seconds: float = 0.0
 
 
 def colorize_image_file(
@@ -113,6 +118,7 @@ def colorize_rgb_frame_profiled(
     postprocess_config: dict | None = None,
 ) -> tuple[np.ndarray, InferenceProfile]:
     preprocess_started = time.perf_counter()
+    preprocess_upload_seconds = 0.0
     input_rgb = np.ascontiguousarray(input_rgb)
     input_height, input_width = input_rgb.shape[:2]
     render_size = render_factor * 16
@@ -122,21 +128,27 @@ def colorize_rgb_frame_profiled(
 
     tensor = torch.from_numpy(model_input).permute(2, 0, 1).float() / 255.0
     tensor = (tensor - IMAGENET_MEAN) / IMAGENET_STD
+    upload_started = time.perf_counter()
     tensor = tensor.unsqueeze(0).to(model_bundle.device)
+    _synchronize_for_timing(model_bundle.device)
+    preprocess_upload_seconds = time.perf_counter() - upload_started
     preprocess_seconds = time.perf_counter() - preprocess_started
 
     model_started = time.perf_counter()
+    _synchronize_for_timing(model_bundle.device)
     with torch.no_grad():
         output = model_bundle.model(tensor)[0]
+    _synchronize_for_timing(model_bundle.device)
     model_seconds = time.perf_counter() - model_started
 
     postprocess_started = time.perf_counter()
     output = (output * IMAGENET_STD.to(output.device)) + IMAGENET_MEAN.to(output.device)
     output = output.clamp(0.0, 1.0)
-    result = _post_process_tensor(
+    result, postprocess_upload_seconds, postprocess_graph_seconds, postprocess_download_seconds, postprocess_cpu_seconds = _post_process_tensor_profiled(
         raw_color_tensor=output,
         orig_np=input_rgb,
         output_size=(input_height, input_width),
+        device=model_bundle.device,
         postprocess_config=postprocess_config or {},
     )
     postprocess_seconds = time.perf_counter() - postprocess_started
@@ -144,6 +156,11 @@ def colorize_rgb_frame_profiled(
         preprocess_seconds=preprocess_seconds,
         model_seconds=model_seconds,
         postprocess_seconds=postprocess_seconds,
+        preprocess_upload_seconds=preprocess_upload_seconds,
+        postprocess_upload_seconds=postprocess_upload_seconds,
+        postprocess_graph_seconds=postprocess_graph_seconds,
+        postprocess_download_seconds=postprocess_download_seconds,
+        postprocess_cpu_seconds=postprocess_cpu_seconds,
     )
 
 
@@ -158,6 +175,7 @@ def colorize_rgb_batch_profiled(
         return [], InferenceProfile(0.0, 0.0, 0.0)
 
     preprocess_started = time.perf_counter()
+    preprocess_upload_seconds = 0.0
     render_size = render_factor * 16
     processed_inputs: list[np.ndarray] = []
     input_sizes: list[tuple[int, int]] = []
@@ -172,31 +190,50 @@ def colorize_rgb_batch_profiled(
 
     tensor = torch.from_numpy(np.stack(processed_inputs)).permute(0, 3, 1, 2).float() / 255.0
     tensor = (tensor - IMAGENET_MEAN) / IMAGENET_STD
+    upload_started = time.perf_counter()
     tensor = tensor.to(model_bundle.device)
+    _synchronize_for_timing(model_bundle.device)
+    preprocess_upload_seconds = time.perf_counter() - upload_started
     preprocess_seconds = time.perf_counter() - preprocess_started
 
     model_started = time.perf_counter()
+    _synchronize_for_timing(model_bundle.device)
     with torch.no_grad():
         outputs = model_bundle.model(tensor)
+    _synchronize_for_timing(model_bundle.device)
     model_seconds = time.perf_counter() - model_started
 
     postprocess_started = time.perf_counter()
+    postprocess_upload_seconds = 0.0
+    postprocess_graph_seconds = 0.0
+    postprocess_download_seconds = 0.0
+    postprocess_cpu_seconds = 0.0
     outputs = (outputs * IMAGENET_STD.to(outputs.device)) + IMAGENET_MEAN.to(outputs.device)
     outputs = outputs.clamp(0.0, 1.0)
     results: list[np.ndarray] = []
     for output, input_rgb, output_size in zip(outputs, input_rgbs, input_sizes, strict=True):
-        result = _post_process_tensor(
+        result, upload_seconds, graph_seconds, download_seconds, cpu_seconds = _post_process_tensor_profiled(
             raw_color_tensor=output,
             orig_np=input_rgb,
             output_size=output_size,
+            device=model_bundle.device,
             postprocess_config=postprocess_config or {},
         )
         results.append(result)
+        postprocess_upload_seconds += upload_seconds
+        postprocess_graph_seconds += graph_seconds
+        postprocess_download_seconds += download_seconds
+        postprocess_cpu_seconds += cpu_seconds
     postprocess_seconds = time.perf_counter() - postprocess_started
     return results, InferenceProfile(
         preprocess_seconds=preprocess_seconds,
         model_seconds=model_seconds,
         postprocess_seconds=postprocess_seconds,
+        preprocess_upload_seconds=preprocess_upload_seconds,
+        postprocess_upload_seconds=postprocess_upload_seconds,
+        postprocess_graph_seconds=postprocess_graph_seconds,
+        postprocess_download_seconds=postprocess_download_seconds,
+        postprocess_cpu_seconds=postprocess_cpu_seconds,
     )
 
 
@@ -235,13 +272,35 @@ def _post_process_tensor(
     output_size: tuple[int, int],
     postprocess_config: dict,
 ) -> np.ndarray:
+    result, _, _, _, _ = _post_process_tensor_profiled(
+        raw_color_tensor=raw_color_tensor,
+        orig_np=orig_np,
+        output_size=output_size,
+        device=raw_color_tensor.device,
+        postprocess_config=postprocess_config,
+    )
+    return result
+
+
+def _post_process_tensor_profiled(
+    *,
+    raw_color_tensor: torch.Tensor,
+    orig_np: np.ndarray,
+    output_size: tuple[int, int],
+    device: torch.device,
+    postprocess_config: dict,
+) -> tuple[np.ndarray, float, float, float, float]:
+    graph_started = time.perf_counter()
     upsampled = F.interpolate(
         raw_color_tensor.unsqueeze(0),
         size=output_size,
         mode="bilinear",
         align_corners=False,
     )[0]
+    _synchronize_for_timing(device)
+    graph_seconds = time.perf_counter() - graph_started
 
+    upload_started = time.perf_counter()
     orig_tensor = (
         torch.from_numpy(np.array(orig_np, copy=True))
         .to(raw_color_tensor.device)
@@ -249,16 +308,32 @@ def _post_process_tensor(
         .float()
         / 255.0
     )
+    _synchronize_for_timing(device)
+    upload_seconds = time.perf_counter() - upload_started
 
+    graph_started = time.perf_counter()
     final_tensor = _transfer_chroma_tensor(orig_tensor=orig_tensor, color_tensor=upsampled)
-    final_np = (final_tensor.clamp(0.0, 1.0).permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
+    final_tensor = final_tensor.clamp(0.0, 1.0).permute(1, 2, 0)
+    _synchronize_for_timing(device)
+    graph_seconds += time.perf_counter() - graph_started
 
+    download_started = time.perf_counter()
+    final_np = (final_tensor.cpu().numpy() * 255.0).astype(np.uint8)
+    download_seconds = time.perf_counter() - download_started
+
+    cpu_started = time.perf_counter()
     warmth = float(postprocess_config.get("warmth", 0.0))
     shadow_warmth = float(postprocess_config.get("shadow_warmth", 0.0))
     blue_reduction = float(postprocess_config.get("blue_reduction", 0.0))
     if warmth == 0.0 and shadow_warmth == 0.0 and blue_reduction == 0.0:
-        return final_np
-    return _apply_color_bias(final_np, postprocess_config)
+        return final_np, upload_seconds, graph_seconds, download_seconds, time.perf_counter() - cpu_started
+    return (
+        _apply_color_bias(final_np, postprocess_config),
+        upload_seconds,
+        graph_seconds,
+        download_seconds,
+        time.perf_counter() - cpu_started,
+    )
 
 
 def _transfer_chroma_tensor(
@@ -275,6 +350,11 @@ def _transfer_chroma_tensor(
     rgb[1] = y - 0.39465 * u - 0.58060 * v
     rgb[2] = y + 2.03211 * u
     return rgb
+
+
+def _synchronize_for_timing(device: torch.device) -> None:
+    if device.type == "mps":
+        torch.mps.synchronize()
 
 
 def _apply_color_bias(image_rgb: np.ndarray, postprocess_config: dict) -> np.ndarray:

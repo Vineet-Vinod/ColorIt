@@ -223,6 +223,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Explicit training_state checkpoint path to resume from.",
     )
+    parser.add_argument(
+        "--save-every-epoch",
+        action="store_true",
+        help="Save an inference-compatible checkpoint for every completed epoch.",
+    )
     return parser.parse_args()
 
 
@@ -292,9 +297,12 @@ def main() -> int:
     metrics_log_path = output_dir / "metrics.jsonl"
     best_checkpoint_path = output_dir / "best.pth"
     last_checkpoint_path = output_dir / "last.pth"
+    epoch_checkpoint_dir = output_dir / "epoch_checkpoints"
     training_state_path = output_dir / "training_state.pth"
     config_path = output_dir / "run_config.json"
     config_path.write_text(json.dumps(vars(args), indent=2), encoding="utf-8")
+    if args.save_every_epoch:
+        epoch_checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     resume_state = maybe_resume_state(
         args=args,
@@ -360,6 +368,8 @@ def main() -> int:
             preview_count=args.preview_count,
         )
         save_checkpoint(last_checkpoint_path, model, args, epoch, metrics)
+        if args.save_every_epoch:
+            save_checkpoint(epoch_checkpoint_dir / f"epoch_{epoch:02d}.pth", model, args, epoch, metrics)
         save_training_state(
             checkpoint_path=training_state_path,
             model=model,

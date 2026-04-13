@@ -11,6 +11,8 @@ runtime:
   deterministic: true
   frame_transport: pipe
   inference_batch_size: 16
+  torch_compile: true
+  torch_compile_mode: default
   cleanup_frames: true
   cleanup_scene_clips: true
 

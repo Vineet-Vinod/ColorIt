@@ -37,11 +37,21 @@ def select_device(config: AppConfig) -> tuple[torch.device, str]:
 def load_colorizer_bundle(config: AppConfig) -> ModelBundle:
     paths = resolve_project_paths(config)
     device, backend = select_device(config)
+    runtime_config = config.raw.get("runtime", {})
 
     model = DeoldifyVideoModel()
     checkpoint = _load_checkpoint(paths.weights_path)
     model.load_state_dict(checkpoint["model"], strict=True)
     model.to(device)
+    if bool(runtime_config.get("torch_compile", False)):
+        compile_kwargs = {}
+        compile_mode = runtime_config.get("torch_compile_mode")
+        compile_backend = runtime_config.get("torch_compile_backend")
+        if compile_mode:
+            compile_kwargs["mode"] = str(compile_mode)
+        if compile_backend:
+            compile_kwargs["backend"] = str(compile_backend)
+        model = torch.compile(model, **compile_kwargs)
     model.eval()
 
     return ModelBundle(model=model, device=device, backend=backend)

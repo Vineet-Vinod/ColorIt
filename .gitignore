@@ -14,6 +14,7 @@ data/colorized/
 data/final/
 data/finetune/
 data/frames/
+data/experiments/
 data/logs/
 data/probe_clips/*
 data/scenes/*

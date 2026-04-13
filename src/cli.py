@@ -10,6 +10,7 @@ from src.pipeline.batch import run_colorize_batch
 from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.compress import run_compress_final
 from src.pipeline.config import load_config
+from src.pipeline.conv_opt import run_benchmark_convs, run_extract_conv_shapes
 from src.pipeline.inference import colorize_image_file
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.probes import run_extract_probes
@@ -261,6 +262,110 @@ def build_parser() -> argparse.ArgumentParser:
     )
     benchmark_parser.set_defaults(handler=handle_benchmark_clips)
 
+    conv_shapes_parser = subparsers.add_parser(
+        "extract-conv-shapes",
+        help="Extract real convolution layer shapes from the current model on a representative clip.",
+    )
+    conv_shapes_parser.add_argument("--config", default="configs/quality.yaml")
+    conv_shapes_parser.add_argument(
+        "--input",
+        default="data/probe_clips/clip_10.mp4",
+        help="Representative input clip path.",
+    )
+    conv_shapes_parser.add_argument(
+        "--output",
+        default="optimize/artifacts/conv_shapes.json",
+        help="Output JSON manifest path.",
+    )
+    conv_shapes_parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=None,
+        help="Optional cap on sampled frames.",
+    )
+    conv_shapes_parser.add_argument(
+        "--max-batches",
+        type=int,
+        default=None,
+        help="Optional cap on sampled batches.",
+    )
+    conv_shapes_parser.set_defaults(handler=handle_extract_conv_shapes)
+
+    conv_bench_parser = subparsers.add_parser(
+        "benchmark-convs",
+        help="Benchmark real convolution shapes against the PyTorch MPS baseline and an optional candidate.",
+    )
+    conv_bench_parser.add_argument("--config", default="configs/full_movie.yaml")
+    conv_bench_parser.add_argument(
+        "--opt-config",
+        default="optimize/configs/default.yaml",
+        help="Optimize workspace config for tolerances and loop defaults.",
+    )
+    conv_bench_parser.add_argument(
+        "--shapes-manifest",
+        default="optimize/artifacts/conv_shapes.json",
+        help="Convolution shape manifest path from extract-conv-shapes.",
+    )
+    conv_bench_parser.add_argument(
+        "--candidate",
+        default=None,
+        help="Optional candidate Python module path implementing run_case(...).",
+    )
+    conv_bench_parser.add_argument(
+        "--output",
+        default="optimize/artifacts/conv_benchmark_results.json",
+        help="Output JSON results path.",
+    )
+    conv_bench_parser.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        help="Benchmark the top K cases by total MACs.",
+    )
+    conv_bench_parser.add_argument(
+        "--case-id",
+        action="append",
+        default=[],
+        help="Specific case id to benchmark. Repeat to select multiple cases.",
+    )
+    conv_bench_parser.add_argument(
+        "--warmup",
+        type=int,
+        default=None,
+        help="Optional warmup iteration override.",
+    )
+    conv_bench_parser.add_argument(
+        "--iterations",
+        type=int,
+        default=None,
+        help="Optional timed iteration override.",
+    )
+    conv_bench_parser.add_argument(
+        "--correctness-trials",
+        type=int,
+        default=None,
+        help="Optional correctness trial override.",
+    )
+    conv_bench_parser.add_argument(
+        "--atol",
+        type=float,
+        default=None,
+        help="Optional absolute tolerance override.",
+    )
+    conv_bench_parser.add_argument(
+        "--rtol",
+        type=float,
+        default=None,
+        help="Optional relative tolerance override.",
+    )
+    conv_bench_parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional deterministic seed override.",
+    )
+    conv_bench_parser.set_defaults(handler=handle_benchmark_convs)
+
     return parser
 
 
@@ -377,6 +482,38 @@ def handle_benchmark_clips(args: argparse.Namespace) -> int:
         manifest_path=Path(args.manifest_path) if args.manifest_path else None,
         overwrite=args.overwrite,
         sample_interval_seconds=args.sample_interval_seconds,
+    )
+
+
+def handle_extract_conv_shapes(args: argparse.Namespace) -> int:
+    config = load_config(Path(args.config))
+    return run_extract_conv_shapes(
+        config=config,
+        config_path=Path(args.config),
+        input_path=Path(args.input),
+        output_path=Path(args.output) if args.output else None,
+        max_frames=args.max_frames,
+        max_batches=args.max_batches,
+    )
+
+
+def handle_benchmark_convs(args: argparse.Namespace) -> int:
+    config = load_config(Path(args.config))
+    return run_benchmark_convs(
+        config=config,
+        config_path=Path(args.config),
+        optimize_config_path=Path(args.opt_config) if args.opt_config else None,
+        shapes_manifest_path=Path(args.shapes_manifest),
+        candidate_path=Path(args.candidate) if args.candidate else None,
+        output_path=Path(args.output) if args.output else None,
+        top_k=args.top_k,
+        case_ids=list(args.case_id),
+        warmup_iterations=args.warmup,
+        timed_iterations=args.iterations,
+        correctness_trials=args.correctness_trials,
+        atol=args.atol,
+        rtol=args.rtol,
+        seed=args.seed,
     )
 
 

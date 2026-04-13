@@ -1,0 +1,12 @@
+shape_extraction:
+  max_frames: 128
+  max_batches: 8
+
+benchmark:
+  top_k: 10
+  warmup_iterations: 25
+  timed_iterations: 100
+  correctness_trials: 5
+  atol: 5.0e-4
+  rtol: 5.0e-3
+  seed: 1234

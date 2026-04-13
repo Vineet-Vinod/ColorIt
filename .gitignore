@@ -19,7 +19,9 @@ data/probe_clips/*
 data/scenes/*
 data/manifests/*.json
 data/manifests/concat_*.txt
+optimize/artifacts/*
 
 # Allow directory placeholders
 !data/**/.gitkeep
 !models/deoldify/.gitkeep
+!optimize/artifacts/.gitkeep

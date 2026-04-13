@@ -96,10 +96,34 @@ Outputs:
 
 - best checkpoint: `best.pth`
 - last checkpoint: `last.pth`
+- resumable trainer state: `training_state.pth`
 - epoch metrics: `metrics.jsonl`
 - validation previews: `previews/epoch_XX.png`
 
 The saved checkpoint includes a top-level `model` state dict, so the current inference loader can use it directly.
+
+## Overnight Launch
+
+Use the helper script so the machine stays awake, output is logged, and resume is enabled by default:
+
+```bash
+bash scripts/run_finetune_overnight.sh \
+  kannada_period_stage1 \
+  data/finetune/kannada_period/manifest.jsonl \
+  --checkpoint models/deoldify/ColorizeVideo_gen.pth \
+  --image-size 256 \
+  --batch-size 4 \
+  --epochs 8 \
+  --learning-rate 1e-4 \
+  --freeze-encoder-epochs 1
+```
+
+This writes:
+
+- checkpoints: `models/deoldify/finetune/kannada_period_stage1/`
+- logs: `data/logs/finetune/`
+
+If the process stops after a completed epoch, rerun the same command and it resumes from `training_state.pth`.
 
 ## 4. Optional Stage 2
 

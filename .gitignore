@@ -11,6 +11,7 @@ __pycache__/
 models/deoldify/*.pth
 data/colorized/
 data/final/
+data/finetune/
 data/frames/
 data/logs/
 data/probe_clips/*

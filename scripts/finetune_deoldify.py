@@ -218,6 +218,54 @@ def parse_args() -> argparse.Namespace:
         help="Tolerance before the costume vividness penalty activates.",
     )
     parser.add_argument(
+        "--background-reconstruction-weight",
+        type=float,
+        default=0.45,
+        help="Base reconstruction weight applied to background regions.",
+    )
+    parser.add_argument(
+        "--actor-reconstruction-weight",
+        type=float,
+        default=2.2,
+        help="Base reconstruction weight applied to actor/person regions.",
+    )
+    parser.add_argument(
+        "--skin-reconstruction-boost",
+        type=float,
+        default=0.40,
+        help="Additional reconstruction emphasis applied to skin regions.",
+    )
+    parser.add_argument(
+        "--costume-reconstruction-boost",
+        type=float,
+        default=0.85,
+        help="Additional reconstruction emphasis applied to costume regions.",
+    )
+    parser.add_argument(
+        "--skin-rgb-match-weight",
+        type=float,
+        default=0.30,
+        help="Extra RGB reconstruction loss applied only on skin regions.",
+    )
+    parser.add_argument(
+        "--costume-chroma-match-weight",
+        type=float,
+        default=0.55,
+        help="Extra chroma reconstruction loss applied only on costume regions.",
+    )
+    parser.add_argument(
+        "--skin-hue-penalty-weight",
+        type=float,
+        default=0.22,
+        help="Penalty for drifting away from the target hue direction on skin regions.",
+    )
+    parser.add_argument(
+        "--skin-hue-threshold",
+        type=float,
+        default=0.05,
+        help="Minimum target skin saturation before the hue-consistency penalty activates.",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Resume from output-dir/training_state.pth if it exists.",
@@ -635,6 +683,14 @@ def compute_losses(
     costume_vividness_penalty_weight = get_arg(args, "costume_vividness_penalty_weight", 0.28)
     costume_vividness_threshold = get_arg(args, "costume_vividness_threshold", 0.18)
     costume_vividness_margin = get_arg(args, "costume_vividness_margin", 0.03)
+    background_reconstruction_weight = get_arg(args, "background_reconstruction_weight", 0.45)
+    actor_reconstruction_weight = get_arg(args, "actor_reconstruction_weight", 2.2)
+    skin_reconstruction_boost = get_arg(args, "skin_reconstruction_boost", 0.40)
+    costume_reconstruction_boost = get_arg(args, "costume_reconstruction_boost", 0.85)
+    skin_rgb_match_weight = get_arg(args, "skin_rgb_match_weight", 0.30)
+    costume_chroma_match_weight = get_arg(args, "costume_chroma_match_weight", 0.55)
+    skin_hue_penalty_weight = get_arg(args, "skin_hue_penalty_weight", 0.22)
+    skin_hue_threshold = get_arg(args, "skin_hue_threshold", 0.05)
 
     prediction_luma = rgb_to_luma(prediction_rgb)
     target_luma = rgb_to_luma(target_rgb)
@@ -654,20 +710,12 @@ def compute_losses(
         actor_weight = torch.maximum(center_prior, person_mask)
     else:
         actor_weight = center_prior
-    center_weights = 1.0 + center_loss_strength * center_prior
-    rgb_l1 = weighted_channel_mean(torch.abs(prediction_rgb - target_rgb), center_weights)
-    chroma_l1 = weighted_channel_mean(torch.abs(prediction_chroma - target_chroma), center_weights)
-    saturation_l1 = weighted_channel_mean(
-        torch.abs(prediction_saturation - target_saturation),
-        center_weights,
-    )
 
     prediction_blue = prediction_rgb[:, 2:3]
     target_blue = target_rgb[:, 2:3]
     target_reference = torch.maximum(target_rgb[:, 0:1], target_rgb[:, 1:2])
     not_blue_target = torch.relu(target_reference - target_blue)
     excess_blue = torch.relu(prediction_blue - target_blue - blue_margin)
-    blue_penalty = weighted_channel_mean(excess_blue * not_blue_target, center_weights)
     if skin_mask is not None and torch.count_nonzero(skin_mask).item() > 0:
         skin_mask = skin_mask.clamp(0.0, 1.0)
     else:
@@ -685,6 +733,24 @@ def compute_losses(
             center_prior=actor_weight,
             skin_mask=skin_mask,
         )
+    reconstruction_weights = build_reconstruction_weights(
+        center_prior=center_prior,
+        actor_weight=actor_weight,
+        skin_mask=skin_mask,
+        costume_mask=costume_mask,
+        background_weight=background_reconstruction_weight,
+        actor_weight_scale=actor_reconstruction_weight,
+        skin_boost=skin_reconstruction_boost,
+        costume_boost=costume_reconstruction_boost,
+        center_loss_strength=center_loss_strength,
+    )
+    rgb_l1 = weighted_channel_mean(torch.abs(prediction_rgb - target_rgb), reconstruction_weights)
+    chroma_l1 = weighted_channel_mean(torch.abs(prediction_chroma - target_chroma), reconstruction_weights)
+    saturation_l1 = weighted_channel_mean(
+        torch.abs(prediction_saturation - target_saturation),
+        reconstruction_weights,
+    )
+    blue_penalty = weighted_channel_mean(excess_blue * not_blue_target, reconstruction_weights)
     neutral_mask = build_neutral_mask(
         target_saturation=target_saturation,
         center_prior=actor_weight,
@@ -703,6 +769,13 @@ def compute_losses(
         torch.relu(target_saturation - prediction_saturation - costume_vividness_margin),
         vivid_costume_mask,
     )
+    skin_rgb_match = weighted_channel_mean(torch.abs(prediction_rgb - target_rgb), skin_mask)
+    costume_chroma_match = weighted_channel_mean(torch.abs(prediction_chroma - target_chroma), vivid_costume_mask)
+    skin_hue_mask = skin_mask * (target_saturation > skin_hue_threshold).to(target_saturation.dtype)
+    prediction_chroma_unit = prediction_chroma / prediction_saturation.clamp_min(1e-4)
+    target_chroma_unit = target_chroma / target_saturation.clamp_min(1e-4)
+    skin_hue_alignment = 1.0 - torch.sum(prediction_chroma_unit * target_chroma_unit, dim=1, keepdim=True).clamp(-1.0, 1.0)
+    skin_hue_penalty = weighted_channel_mean(skin_hue_alignment, skin_hue_mask)
 
     loss = (
         rgb_loss_weight * rgb_l1
@@ -714,6 +787,9 @@ def compute_losses(
         + costume_blue_penalty_weight * costume_blue_penalty
         + costume_dark_penalty_weight * costume_dark_penalty
         + costume_vividness_penalty_weight * costume_vividness_penalty
+        + skin_rgb_match_weight * skin_rgb_match
+        + costume_chroma_match_weight * costume_chroma_match
+        + skin_hue_penalty_weight * skin_hue_penalty
     )
     return {
         "loss": loss,
@@ -725,6 +801,9 @@ def compute_losses(
         "costume_blue_penalty": costume_blue_penalty,
         "costume_dark_penalty": costume_dark_penalty,
         "costume_vividness_penalty": costume_vividness_penalty,
+        "skin_rgb_match": skin_rgb_match,
+        "costume_chroma_match": costume_chroma_match,
+        "skin_hue_penalty": skin_hue_penalty,
         "neutral_chroma_penalty": neutral_chroma_penalty,
     }
 
@@ -782,6 +861,24 @@ def build_skin_mask(
         & (r_channel > b_channel * 0.75)
     ).to(target_rgb.dtype)
     return skin_mask * torch.clamp(center_prior * 1.25, 0.0, 1.0)
+
+
+def build_reconstruction_weights(
+    *,
+    center_prior: torch.Tensor,
+    actor_weight: torch.Tensor,
+    skin_mask: torch.Tensor,
+    costume_mask: torch.Tensor,
+    background_weight: float,
+    actor_weight_scale: float,
+    skin_boost: float,
+    costume_boost: float,
+    center_loss_strength: float,
+) -> torch.Tensor:
+    base = background_weight + (actor_weight_scale - background_weight) * actor_weight.clamp(0.0, 1.0)
+    detail_boost = 1.0 + skin_boost * skin_mask.clamp(0.0, 1.0) + costume_boost * costume_mask.clamp(0.0, 1.0)
+    center_boost = 1.0 + 0.35 * center_loss_strength * center_prior.clamp(0.0, 1.0)
+    return base * detail_boost * center_boost
 
 
 def build_costume_mask(

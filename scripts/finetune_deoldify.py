@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 import random
+import sys
 import time
 
 import numpy as np
@@ -45,6 +46,14 @@ class EpochMetrics:
     val_saturation_l1: float
     val_blue_penalty: float
     epoch_seconds: float
+
+
+@dataclass(frozen=True)
+class ResumeState:
+    start_epoch: int
+    best_val_loss: float
+    history: list[EpochMetrics]
+    base_checkpoint_path: Path
 
 
 def parse_args() -> argparse.Namespace:
@@ -138,10 +147,24 @@ def parse_args() -> argparse.Namespace:
         default=6,
         help="How many validation samples to render into each epoch preview image.",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from output-dir/training_state.pth if it exists.",
+    )
+    parser.add_argument(
+        "--resume-from",
+        default=None,
+        help="Explicit training_state checkpoint path to resume from.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(line_buffering=True)
     args = parse_args()
     seed_everything(args.seed)
 
@@ -161,9 +184,9 @@ def main() -> int:
         raise RuntimeError("No validation samples found in manifest.")
 
     device = resolve_device(args.device)
-    print(f"Device: {device}")
-    print(f"Train samples: {len(train_samples)}")
-    print(f"Val samples:   {len(val_samples)}")
+    log(f"Device: {device}")
+    log(f"Train samples: {len(train_samples)}")
+    log(f"Val samples:   {len(val_samples)}")
 
     train_dataset = MovieColorDataset(train_samples, image_size=args.image_size, train=True)
     val_dataset = MovieColorDataset(val_samples, image_size=args.image_size, train=False)
@@ -203,13 +226,30 @@ def main() -> int:
     metrics_log_path = output_dir / "metrics.jsonl"
     best_checkpoint_path = output_dir / "best.pth"
     last_checkpoint_path = output_dir / "last.pth"
+    training_state_path = output_dir / "training_state.pth"
     config_path = output_dir / "run_config.json"
     config_path.write_text(json.dumps(vars(args), indent=2), encoding="utf-8")
 
-    best_val_loss = math.inf
+    resume_state = maybe_resume_state(
+        args=args,
+        checkpoint_path=checkpoint_path,
+        training_state_path=training_state_path,
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        device=device,
+    )
+    best_val_loss = resume_state.best_val_loss
     preview_batch = next(iter(val_loader))
-    history: list[EpochMetrics] = []
-    for epoch in range(1, args.epochs + 1):
+    history = resume_state.history
+    base_checkpoint_path = resume_state.base_checkpoint_path
+    if resume_state.start_epoch > args.epochs:
+        log(f"Training already complete at epoch {resume_state.start_epoch - 1}. Nothing to do.")
+        return 0
+    if resume_state.start_epoch > 1:
+        log(f"Resuming from epoch {resume_state.start_epoch}.")
+
+    for epoch in range(resume_state.start_epoch, args.epochs + 1):
         epoch_started = time.perf_counter()
         set_module_trainable(model[0], epoch > args.freeze_encoder_epochs)
         train_metrics = run_epoch(
@@ -254,10 +294,39 @@ def main() -> int:
             preview_count=args.preview_count,
         )
         save_checkpoint(last_checkpoint_path, model, args, epoch, metrics)
+        save_training_state(
+            checkpoint_path=training_state_path,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            args=args,
+            epoch=epoch,
+            best_val_loss=best_val_loss,
+            history=history,
+            base_checkpoint_path=base_checkpoint_path,
+        )
         if metrics.val_loss < best_val_loss:
             best_val_loss = metrics.val_loss
             save_checkpoint(best_checkpoint_path, model, args, epoch, metrics)
-        print(
+            save_training_state(
+                checkpoint_path=training_state_path,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                args=args,
+                epoch=epoch,
+                best_val_loss=best_val_loss,
+                history=history,
+                base_checkpoint_path=base_checkpoint_path,
+            )
+        write_summary(
+            summary_path=output_dir / "summary.json",
+            best_val_loss=best_val_loss,
+            history=history,
+            manifest_path=manifest_path,
+            base_checkpoint_path=base_checkpoint_path,
+        )
+        log(
             f"epoch {epoch:02d} "
             f"train_loss={metrics.train_loss:.4f} "
             f"val_loss={metrics.val_loss:.4f} "
@@ -267,22 +336,17 @@ def main() -> int:
             f"time={metrics.epoch_seconds/60.0:.1f}m"
         )
 
-    summary_path = output_dir / "summary.json"
-    summary_path.write_text(
-        json.dumps(
-            {
-                "best_val_loss": best_val_loss,
-                "epochs": [asdict(item) for item in history],
-                "manifest": str(manifest_path),
-                "base_checkpoint": str(checkpoint_path),
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
+    write_summary(
+        summary_path=output_dir / "summary.json",
+        best_val_loss=best_val_loss,
+        history=history,
+        manifest_path=manifest_path,
+        base_checkpoint_path=base_checkpoint_path,
     )
-    print(f"Best checkpoint: {best_checkpoint_path}")
-    print(f"Last checkpoint: {last_checkpoint_path}")
-    print(f"Metrics log:     {metrics_log_path}")
+    log(f"Best checkpoint: {best_checkpoint_path}")
+    log(f"Last checkpoint: {last_checkpoint_path}")
+    log(f"State checkpoint: {training_state_path}")
+    log(f"Metrics log:     {metrics_log_path}")
     return 0
 
 
@@ -389,6 +453,8 @@ def run_epoch(
         prediction_rgb = denormalize_image(prediction_norm).clamp(0.0, 1.0)
         losses = compute_losses(prediction_rgb, target_rgb, args)
         loss = losses["loss"]
+        if not bool(torch.isfinite(loss).item()):
+            raise RuntimeError("Encountered non-finite loss during training.")
         if train:
             assert optimizer is not None
             optimizer.zero_grad(set_to_none=True)
@@ -467,7 +533,111 @@ def save_checkpoint(
             "metrics": asdict(metrics),
         },
     }
-    torch.save(payload, checkpoint_path)
+    atomic_torch_save(payload, checkpoint_path)
+
+
+def save_training_state(
+    *,
+    checkpoint_path: Path,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    args: argparse.Namespace,
+    epoch: int,
+    best_val_loss: float,
+    history: list[EpochMetrics],
+    base_checkpoint_path: Path,
+) -> None:
+    payload = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "epoch": epoch,
+        "best_val_loss": best_val_loss,
+        "history": [asdict(item) for item in history],
+        "base_checkpoint_path": str(base_checkpoint_path),
+        "args": vars(args),
+    }
+    atomic_torch_save(payload, checkpoint_path)
+
+
+def maybe_resume_state(
+    *,
+    args: argparse.Namespace,
+    checkpoint_path: Path,
+    training_state_path: Path,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    device: torch.device,
+) -> ResumeState:
+    resume_path: Path | None = None
+    if args.resume_from:
+        resume_path = Path(args.resume_from).expanduser().resolve()
+    elif args.resume:
+        resume_path = training_state_path
+
+    if resume_path is None:
+        return ResumeState(
+            start_epoch=1,
+            best_val_loss=math.inf,
+            history=[],
+            base_checkpoint_path=checkpoint_path,
+        )
+    if not resume_path.exists():
+        log(f"Resume state not found at {resume_path}. Starting fresh.")
+        return ResumeState(
+            start_epoch=1,
+            best_val_loss=math.inf,
+            history=[],
+            base_checkpoint_path=checkpoint_path,
+        )
+
+    state = torch.load(resume_path, map_location="cpu")
+    model.load_state_dict(state["model"], strict=True)
+    model.to(device)
+    optimizer.load_state_dict(state["optimizer"])
+    scheduler.load_state_dict(state["scheduler"])
+    history = [EpochMetrics(**item) for item in state.get("history", [])]
+    start_epoch = int(state["epoch"]) + 1
+    best_val_loss = float(state.get("best_val_loss", math.inf))
+    base_checkpoint_path = Path(state.get("base_checkpoint_path", checkpoint_path)).expanduser().resolve()
+    log(f"Loaded resume state from {resume_path}")
+    return ResumeState(
+        start_epoch=start_epoch,
+        best_val_loss=best_val_loss,
+        history=history,
+        base_checkpoint_path=base_checkpoint_path,
+    )
+
+
+def write_summary(
+    *,
+    summary_path: Path,
+    best_val_loss: float,
+    history: list[EpochMetrics],
+    manifest_path: Path,
+    base_checkpoint_path: Path,
+) -> None:
+    summary_path.write_text(
+        json.dumps(
+            {
+                "best_val_loss": best_val_loss,
+                "epochs": [asdict(item) for item in history],
+                "manifest": str(manifest_path),
+                "base_checkpoint": str(base_checkpoint_path),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def atomic_torch_save(payload: dict[str, object], checkpoint_path: Path) -> None:
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = checkpoint_path.with_name(f"{checkpoint_path.name}.tmp")
+    torch.save(payload, temp_path)
+    temp_path.replace(checkpoint_path)
 
 
 def append_jsonl(path: Path, payload: dict[str, object]) -> None:
@@ -546,6 +716,11 @@ def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+
+
+def log(message: str) -> None:
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {message}", flush=True)
 
 
 if __name__ == "__main__":

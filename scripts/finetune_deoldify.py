@@ -120,19 +120,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--chroma-loss-weight",
         type=float,
-        default=1.75,
+        default=1.10,
         help="Weight for chroma reconstruction loss.",
     )
     parser.add_argument(
         "--saturation-loss-weight",
         type=float,
-        default=0.5,
+        default=0.20,
         help="Weight for saturation magnitude matching.",
     )
     parser.add_argument(
         "--blue-penalty-weight",
         type=float,
-        default=0.35,
+        default=0.08,
         help="Weight for penalizing excess blue where the target is not blue-dominant.",
     )
     parser.add_argument(
@@ -146,6 +146,72 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=6,
         help="How many validation samples to render into each epoch preview image.",
+    )
+    parser.add_argument(
+        "--center-loss-strength",
+        type=float,
+        default=2.0,
+        help="Extra loss weight applied to central image regions.",
+    )
+    parser.add_argument(
+        "--center-loss-sigma",
+        type=float,
+        default=0.45,
+        help="Gaussian spread used for the center-prior loss weighting.",
+    )
+    parser.add_argument(
+        "--neutral-chroma-penalty-weight",
+        type=float,
+        default=0.12,
+        help="Penalty for adding chroma where the target is near-neutral.",
+    )
+    parser.add_argument(
+        "--neutral-saturation-threshold",
+        type=float,
+        default=0.10,
+        help="Target saturation threshold below which neutral-region penalties activate.",
+    )
+    parser.add_argument(
+        "--skin-blue-penalty-weight",
+        type=float,
+        default=0.35,
+        help="Extra blue-avoidance penalty applied to likely skin regions.",
+    )
+    parser.add_argument(
+        "--costume-blue-penalty-weight",
+        type=float,
+        default=0.18,
+        help="Extra blue-avoidance penalty applied to likely costume regions.",
+    )
+    parser.add_argument(
+        "--costume-dark-penalty-weight",
+        type=float,
+        default=0.20,
+        help="Penalty for making likely costume regions darker than the target.",
+    )
+    parser.add_argument(
+        "--costume-dark-margin",
+        type=float,
+        default=0.08,
+        help="Tolerance before the costume-dark penalty activates.",
+    )
+    parser.add_argument(
+        "--costume-vividness-penalty-weight",
+        type=float,
+        default=0.28,
+        help="Penalty for under-saturated costume regions that should carry color.",
+    )
+    parser.add_argument(
+        "--costume-vividness-threshold",
+        type=float,
+        default=0.18,
+        help="Target saturation threshold above which costume vividness is enforced.",
+    )
+    parser.add_argument(
+        "--costume-vividness-margin",
+        type=float,
+        default=0.03,
+        help="Tolerance before the costume vividness penalty activates.",
     )
     parser.add_argument(
         "--resume",
@@ -363,7 +429,7 @@ class MovieColorDataset(Dataset):
         sample = self.samples[index]
         image = Image.open(sample.image_path).convert("RGB")
         if self.train:
-            image = random_resized_square_crop(image, self.image_size)
+            image = random_center_biased_square_crop(image, self.image_size)
             if random.random() < 0.5:
                 image = ImageOps.mirror(image)
         else:
@@ -474,30 +540,89 @@ def compute_losses(
     target_rgb: torch.Tensor,
     args: argparse.Namespace,
 ) -> dict[str, torch.Tensor]:
-    rgb_l1 = torch.mean(torch.abs(prediction_rgb - target_rgb))
+    center_loss_sigma = get_arg(args, "center_loss_sigma", 0.45)
+    center_loss_strength = get_arg(args, "center_loss_strength", 2.0)
+    blue_margin = get_arg(args, "blue_margin", 0.02)
+    neutral_saturation_threshold = get_arg(args, "neutral_saturation_threshold", 0.10)
+    rgb_loss_weight = get_arg(args, "rgb_loss_weight", 1.0)
+    chroma_loss_weight = get_arg(args, "chroma_loss_weight", 1.10)
+    saturation_loss_weight = get_arg(args, "saturation_loss_weight", 0.20)
+    blue_penalty_weight = get_arg(args, "blue_penalty_weight", 0.08)
+    neutral_chroma_penalty_weight = get_arg(args, "neutral_chroma_penalty_weight", 0.12)
+    skin_blue_penalty_weight = get_arg(args, "skin_blue_penalty_weight", 0.35)
+    costume_blue_penalty_weight = get_arg(args, "costume_blue_penalty_weight", 0.18)
+    costume_dark_penalty_weight = get_arg(args, "costume_dark_penalty_weight", 0.20)
+    costume_dark_margin = get_arg(args, "costume_dark_margin", 0.08)
+    costume_vividness_penalty_weight = get_arg(args, "costume_vividness_penalty_weight", 0.28)
+    costume_vividness_threshold = get_arg(args, "costume_vividness_threshold", 0.18)
+    costume_vividness_margin = get_arg(args, "costume_vividness_margin", 0.03)
 
     prediction_luma = rgb_to_luma(prediction_rgb)
     target_luma = rgb_to_luma(target_rgb)
     prediction_chroma = prediction_rgb - prediction_luma
     target_chroma = target_rgb - target_luma
-    chroma_l1 = torch.mean(torch.abs(prediction_chroma - target_chroma))
-
     prediction_saturation = torch.sqrt(torch.sum(prediction_chroma**2, dim=1, keepdim=True) + 1e-6)
     target_saturation = torch.sqrt(torch.sum(target_chroma**2, dim=1, keepdim=True) + 1e-6)
-    saturation_l1 = torch.mean(torch.abs(prediction_saturation - target_saturation))
+    center_prior = build_center_prior(
+        height=target_rgb.shape[-2],
+        width=target_rgb.shape[-1],
+        device=target_rgb.device,
+        dtype=target_rgb.dtype,
+        sigma=center_loss_sigma,
+    )
+    center_weights = 1.0 + center_loss_strength * center_prior
+    rgb_l1 = weighted_channel_mean(torch.abs(prediction_rgb - target_rgb), center_weights)
+    chroma_l1 = weighted_channel_mean(torch.abs(prediction_chroma - target_chroma), center_weights)
+    saturation_l1 = weighted_channel_mean(
+        torch.abs(prediction_saturation - target_saturation),
+        center_weights,
+    )
 
     prediction_blue = prediction_rgb[:, 2:3]
     target_blue = target_rgb[:, 2:3]
     target_reference = torch.maximum(target_rgb[:, 0:1], target_rgb[:, 1:2])
     not_blue_target = torch.relu(target_reference - target_blue)
-    excess_blue = torch.relu(prediction_blue - target_blue - args.blue_margin)
-    blue_penalty = torch.mean(excess_blue * not_blue_target)
+    excess_blue = torch.relu(prediction_blue - target_blue - blue_margin)
+    blue_penalty = weighted_channel_mean(excess_blue * not_blue_target, center_weights)
+    skin_mask = build_skin_mask(
+        target_rgb=target_rgb,
+        target_luma=target_luma,
+        center_prior=center_prior,
+    )
+    costume_mask = build_costume_mask(
+        target_luma=target_luma,
+        target_saturation=target_saturation,
+        center_prior=center_prior,
+        skin_mask=skin_mask,
+    )
+    neutral_mask = build_neutral_mask(
+        target_saturation=target_saturation,
+        center_prior=center_prior,
+        threshold=neutral_saturation_threshold,
+    )
+    skin_blue_penalty = weighted_channel_mean(excess_blue * not_blue_target, skin_mask)
+    costume_blue_penalty = weighted_channel_mean(excess_blue * not_blue_target, costume_mask)
+    costume_dark_penalty = weighted_channel_mean(
+        torch.relu(target_luma - prediction_luma - costume_dark_margin),
+        costume_mask * (target_luma > 0.18).to(target_luma.dtype),
+    )
+    neutral_chroma_penalty = weighted_channel_mean(prediction_saturation, neutral_mask)
+    vivid_costume_mask = costume_mask * (target_saturation > costume_vividness_threshold).to(target_saturation.dtype)
+    costume_vividness_penalty = weighted_channel_mean(
+        torch.relu(target_saturation - prediction_saturation - costume_vividness_margin),
+        vivid_costume_mask,
+    )
 
     loss = (
-        args.rgb_loss_weight * rgb_l1
-        + args.chroma_loss_weight * chroma_l1
-        + args.saturation_loss_weight * saturation_l1
-        + args.blue_penalty_weight * blue_penalty
+        rgb_loss_weight * rgb_l1
+        + chroma_loss_weight * chroma_l1
+        + saturation_loss_weight * saturation_l1
+        + blue_penalty_weight * blue_penalty
+        + neutral_chroma_penalty_weight * neutral_chroma_penalty
+        + skin_blue_penalty_weight * skin_blue_penalty
+        + costume_blue_penalty_weight * costume_blue_penalty
+        + costume_dark_penalty_weight * costume_dark_penalty
+        + costume_vividness_penalty_weight * costume_vividness_penalty
     )
     return {
         "loss": loss,
@@ -505,12 +630,95 @@ def compute_losses(
         "chroma_l1": chroma_l1,
         "saturation_l1": saturation_l1,
         "blue_penalty": blue_penalty,
+        "skin_blue_penalty": skin_blue_penalty,
+        "costume_blue_penalty": costume_blue_penalty,
+        "costume_dark_penalty": costume_dark_penalty,
+        "costume_vividness_penalty": costume_vividness_penalty,
+        "neutral_chroma_penalty": neutral_chroma_penalty,
     }
 
 
 def rgb_to_luma(rgb: torch.Tensor) -> torch.Tensor:
     weights = torch.tensor([0.299, 0.587, 0.114], device=rgb.device, dtype=rgb.dtype).view(1, 3, 1, 1)
     return torch.sum(rgb * weights, dim=1, keepdim=True)
+
+
+def weighted_channel_mean(values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+    expanded_weights = weights.expand(values.shape[0], values.shape[1], values.shape[2], values.shape[3])
+    return (values * expanded_weights).sum() / expanded_weights.sum().clamp_min(1e-6)
+
+
+def get_arg(args: argparse.Namespace, name: str, default: float) -> float:
+    value = getattr(args, name, default)
+    return float(value)
+
+
+def build_center_prior(
+    *,
+    height: int,
+    width: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    sigma: float,
+) -> torch.Tensor:
+    y_coords = torch.linspace(-1.0, 1.0, steps=height, device=device, dtype=dtype)
+    x_coords = torch.linspace(-1.0, 1.0, steps=width, device=device, dtype=dtype)
+    yy, xx = torch.meshgrid(y_coords, x_coords, indexing="ij")
+    sigma_sq = max(sigma, 1e-3) ** 2
+    gaussian = torch.exp(-(xx.square() + yy.square()) / (2.0 * sigma_sq))
+    return gaussian.unsqueeze(0).unsqueeze(0)
+
+
+def build_skin_mask(
+    *,
+    target_rgb: torch.Tensor,
+    target_luma: torch.Tensor,
+    center_prior: torch.Tensor,
+) -> torch.Tensor:
+    r_channel = target_rgb[:, 0:1]
+    g_channel = target_rgb[:, 1:2]
+    b_channel = target_rgb[:, 2:3]
+    cb = -0.168736 * r_channel - 0.331264 * g_channel + 0.5 * b_channel + 0.5
+    cr = 0.5 * r_channel - 0.418688 * g_channel - 0.081312 * b_channel + 0.5
+    skin_mask = (
+        (cb > 0.30)
+        & (cb < 0.54)
+        & (cr > 0.52)
+        & (cr < 0.68)
+        & (target_luma > 0.18)
+        & (target_luma < 0.95)
+        & (r_channel > g_channel * 0.85)
+        & (r_channel > b_channel * 0.75)
+    ).to(target_rgb.dtype)
+    return skin_mask * torch.clamp(center_prior * 1.25, 0.0, 1.0)
+
+
+def build_costume_mask(
+    *,
+    target_luma: torch.Tensor,
+    target_saturation: torch.Tensor,
+    center_prior: torch.Tensor,
+    skin_mask: torch.Tensor,
+) -> torch.Tensor:
+    height = target_luma.shape[-2]
+    y_coords = torch.linspace(0.0, 1.0, steps=height, device=target_luma.device, dtype=target_luma.dtype)
+    lower_body_prior = y_coords.view(1, 1, height, 1)
+    actor_prior = torch.clamp((center_prior - 0.15) / 0.85, 0.0, 1.0)
+    chroma_or_fabric = torch.clamp(0.35 + target_saturation * 2.0, 0.0, 1.0)
+    visibility = ((target_luma > 0.08) & (target_luma < 0.98)).to(target_luma.dtype)
+    costume_mask = actor_prior * (0.65 + 0.35 * lower_body_prior) * chroma_or_fabric * visibility
+    return costume_mask * (1.0 - skin_mask.clamp(0.0, 1.0))
+
+
+def build_neutral_mask(
+    *,
+    target_saturation: torch.Tensor,
+    center_prior: torch.Tensor,
+    threshold: float,
+) -> torch.Tensor:
+    neutral_mask = (target_saturation < threshold).to(target_saturation.dtype)
+    background_boost = 1.0 - torch.clamp(center_prior * 0.8, 0.0, 0.8)
+    return neutral_mask * (0.35 + 0.65 * background_boost)
 
 
 def set_module_trainable(module: nn.Module, trainable: bool) -> None:
@@ -698,14 +906,24 @@ def stack_rows(rows: list[Image.Image]) -> Image.Image:
     return canvas
 
 
-def random_resized_square_crop(image: Image.Image, image_size: int) -> Image.Image:
-    i, j, h, w = RandomResizedCrop.get_params(image, scale=(0.8, 1.0), ratio=(0.9, 1.1))
+def random_center_biased_square_crop(image: Image.Image, image_size: int) -> Image.Image:
+    width, height = image.size
+    min_side = min(width, height)
+    crop_side = int(min_side * random.uniform(0.82, 1.0))
+    max_left = max(width - crop_side, 0)
+    max_top = max(height - crop_side, 0)
+    center_left = max_left / 2.0
+    center_top = max_top / 2.0
+    jitter_left = max_left * 0.12
+    jitter_top = max_top * 0.12
+    left = int(round(min(max(random.uniform(center_left - jitter_left, center_left + jitter_left), 0.0), max_left)))
+    top = int(round(min(max(random.uniform(center_top - jitter_top, center_top + jitter_top), 0.0), max_top)))
     return TF.resized_crop(
         image,
-        i,
-        j,
-        h,
-        w,
+        top,
+        left,
+        crop_side,
+        crop_side,
         size=[image_size, image_size],
         interpolation=InterpolationMode.BICUBIC,
         antialias=True,

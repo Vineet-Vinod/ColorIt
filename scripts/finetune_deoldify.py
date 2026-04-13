@@ -17,7 +17,6 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms import functional as TF
-from torchvision.transforms.transforms import RandomResizedCrop
 
 from src.pipeline.model_arch import DeoldifyVideoModel
 from src.pipeline.model_loader import IMAGENET_MEAN, IMAGENET_STD
@@ -61,6 +60,11 @@ def parse_args() -> argparse.Namespace:
         description="Supervised DeOldify generator fine-tuning with extra pressure against unwanted blue casts."
     )
     parser.add_argument("--manifest", required=True, help="Path to manifest.jsonl from prepare_finetune_dataset.py.")
+    parser.add_argument(
+        "--mask-root",
+        default=None,
+        help="Optional directory containing person/skin/costume masks under person|skin|costume/<split>/",
+    )
     parser.add_argument(
         "--checkpoint",
         default="models/deoldify/ColorizeVideo_gen.pth",
@@ -242,6 +246,7 @@ def main() -> int:
     manifest_path = Path(args.manifest).expanduser().resolve()
     checkpoint_path = Path(args.checkpoint).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
+    mask_root = resolve_mask_root(args.mask_root, manifest_path)
     preview_dir = output_dir / "previews"
     output_dir.mkdir(parents=True, exist_ok=True)
     preview_dir.mkdir(parents=True, exist_ok=True)
@@ -258,9 +263,10 @@ def main() -> int:
     log(f"Device: {device}")
     log(f"Train samples: {len(train_samples)}")
     log(f"Val samples:   {len(val_samples)}")
+    log(f"Mask root:     {mask_root if mask_root else 'disabled'}")
 
-    train_dataset = MovieColorDataset(train_samples, image_size=args.image_size, train=True)
-    val_dataset = MovieColorDataset(val_samples, image_size=args.image_size, train=False)
+    train_dataset = MovieColorDataset(train_samples, image_size=args.image_size, train=True, mask_root=mask_root)
+    val_dataset = MovieColorDataset(val_samples, image_size=args.image_size, train=False, mask_root=mask_root)
 
     train_loader = DataLoader(
         train_dataset,
@@ -427,10 +433,11 @@ def main() -> int:
 
 
 class MovieColorDataset(Dataset):
-    def __init__(self, samples: list[ManifestSample], image_size: int, train: bool):
+    def __init__(self, samples: list[ManifestSample], image_size: int, train: bool, mask_root: Path | None = None):
         self.samples = samples
         self.image_size = image_size
         self.train = train
+        self.mask_root = mask_root
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -438,10 +445,25 @@ class MovieColorDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, torch.Tensor | str]:
         sample = self.samples[index]
         image = Image.open(sample.image_path).convert("RGB")
+        person_mask = self._load_mask("person", sample)
+        skin_mask = self._load_mask("skin", sample)
+        costume_mask = self._load_mask("costume", sample)
         if self.train:
-            image = random_center_biased_square_crop(image, self.image_size)
+            image, person_mask, skin_mask, costume_mask = random_center_biased_square_crop(
+                image,
+                self.image_size,
+                person_mask,
+                skin_mask,
+                costume_mask,
+            )
             if random.random() < 0.5:
                 image = ImageOps.mirror(image)
+                if person_mask is not None:
+                    person_mask = ImageOps.mirror(person_mask)
+                if skin_mask is not None:
+                    skin_mask = ImageOps.mirror(skin_mask)
+                if costume_mask is not None:
+                    costume_mask = ImageOps.mirror(costume_mask)
         else:
             image = ImageOps.fit(
                 image,
@@ -449,6 +471,27 @@ class MovieColorDataset(Dataset):
                 method=Image.Resampling.BICUBIC,
                 centering=(0.5, 0.5),
             )
+            if person_mask is not None:
+                person_mask = ImageOps.fit(
+                    person_mask,
+                    (self.image_size, self.image_size),
+                    method=Image.Resampling.BILINEAR,
+                    centering=(0.5, 0.5),
+                )
+            if skin_mask is not None:
+                skin_mask = ImageOps.fit(
+                    skin_mask,
+                    (self.image_size, self.image_size),
+                    method=Image.Resampling.BILINEAR,
+                    centering=(0.5, 0.5),
+                )
+            if costume_mask is not None:
+                costume_mask = ImageOps.fit(
+                    costume_mask,
+                    (self.image_size, self.image_size),
+                    method=Image.Resampling.BILINEAR,
+                    centering=(0.5, 0.5),
+                )
 
         target_rgb = TF.to_tensor(image)
         grayscale = image.convert("L").convert("RGB")
@@ -457,9 +500,21 @@ class MovieColorDataset(Dataset):
             "input_norm": normalize_image(input_rgb),
             "input_rgb": input_rgb,
             "target_rgb": target_rgb,
+            "person_mask": mask_to_tensor(person_mask, self.image_size),
+            "skin_mask": mask_to_tensor(skin_mask, self.image_size),
+            "costume_mask": mask_to_tensor(costume_mask, self.image_size),
             "movie": sample.movie,
             "image_path": sample.image_path,
         }
+
+    def _load_mask(self, mask_type: str, sample: ManifestSample) -> Image.Image | None:
+        if self.mask_root is None:
+            return None
+        split_dir = "train" if sample.split == "train" else "val"
+        mask_path = self.mask_root / mask_type / split_dir / Path(sample.image_path).name
+        if not mask_path.exists():
+            return None
+        return Image.open(mask_path).convert("L")
 
 
 def load_manifest(manifest_path: Path) -> list[ManifestSample]:
@@ -525,9 +580,19 @@ def run_epoch(
     for batch in dataloader:
         input_norm = batch["input_norm"].to(device)
         target_rgb = batch["target_rgb"].to(device)
+        person_mask = batch["person_mask"].to(device)
+        skin_mask = batch["skin_mask"].to(device)
+        costume_mask = batch["costume_mask"].to(device)
         prediction_norm = model(input_norm)
         prediction_rgb = denormalize_image(prediction_norm).clamp(0.0, 1.0)
-        losses = compute_losses(prediction_rgb, target_rgb, args)
+        losses = compute_losses(
+            prediction_rgb,
+            target_rgb,
+            args,
+            person_mask=person_mask,
+            skin_mask=skin_mask,
+            costume_mask=costume_mask,
+        )
         loss = losses["loss"]
         if not bool(torch.isfinite(loss).item()):
             raise RuntimeError("Encountered non-finite loss during training.")
@@ -549,6 +614,10 @@ def compute_losses(
     prediction_rgb: torch.Tensor,
     target_rgb: torch.Tensor,
     args: argparse.Namespace,
+    *,
+    person_mask: torch.Tensor | None = None,
+    skin_mask: torch.Tensor | None = None,
+    costume_mask: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     center_loss_sigma = get_arg(args, "center_loss_sigma", 0.45)
     center_loss_strength = get_arg(args, "center_loss_strength", 2.0)
@@ -580,6 +649,11 @@ def compute_losses(
         dtype=target_rgb.dtype,
         sigma=center_loss_sigma,
     )
+    if person_mask is not None and torch.count_nonzero(person_mask).item() > 0:
+        person_mask = person_mask.clamp(0.0, 1.0)
+        actor_weight = torch.maximum(center_prior, person_mask)
+    else:
+        actor_weight = center_prior
     center_weights = 1.0 + center_loss_strength * center_prior
     rgb_l1 = weighted_channel_mean(torch.abs(prediction_rgb - target_rgb), center_weights)
     chroma_l1 = weighted_channel_mean(torch.abs(prediction_chroma - target_chroma), center_weights)
@@ -594,21 +668,28 @@ def compute_losses(
     not_blue_target = torch.relu(target_reference - target_blue)
     excess_blue = torch.relu(prediction_blue - target_blue - blue_margin)
     blue_penalty = weighted_channel_mean(excess_blue * not_blue_target, center_weights)
-    skin_mask = build_skin_mask(
-        target_rgb=target_rgb,
-        target_luma=target_luma,
-        center_prior=center_prior,
-    )
-    costume_mask = build_costume_mask(
-        target_luma=target_luma,
-        target_saturation=target_saturation,
-        center_prior=center_prior,
-        skin_mask=skin_mask,
-    )
+    if skin_mask is not None and torch.count_nonzero(skin_mask).item() > 0:
+        skin_mask = skin_mask.clamp(0.0, 1.0)
+    else:
+        skin_mask = build_skin_mask(
+            target_rgb=target_rgb,
+            target_luma=target_luma,
+            center_prior=actor_weight,
+        )
+    if costume_mask is not None and torch.count_nonzero(costume_mask).item() > 0:
+        costume_mask = costume_mask.clamp(0.0, 1.0) * (1.0 - skin_mask.clamp(0.0, 1.0))
+    else:
+        costume_mask = build_costume_mask(
+            target_luma=target_luma,
+            target_saturation=target_saturation,
+            center_prior=actor_weight,
+            skin_mask=skin_mask,
+        )
     neutral_mask = build_neutral_mask(
         target_saturation=target_saturation,
-        center_prior=center_prior,
+        center_prior=actor_weight,
         threshold=neutral_saturation_threshold,
+        person_mask=person_mask,
     )
     skin_blue_penalty = weighted_channel_mean(excess_blue * not_blue_target, skin_mask)
     costume_blue_penalty = weighted_channel_mean(excess_blue * not_blue_target, costume_mask)
@@ -725,9 +806,12 @@ def build_neutral_mask(
     target_saturation: torch.Tensor,
     center_prior: torch.Tensor,
     threshold: float,
+    person_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     neutral_mask = (target_saturation < threshold).to(target_saturation.dtype)
     background_boost = 1.0 - torch.clamp(center_prior * 0.8, 0.0, 0.8)
+    if person_mask is not None and torch.count_nonzero(person_mask).item() > 0:
+        background_boost = torch.maximum(background_boost, 1.0 - person_mask.clamp(0.0, 1.0))
     return neutral_mask * (0.35 + 0.65 * background_boost)
 
 
@@ -916,7 +1000,13 @@ def stack_rows(rows: list[Image.Image]) -> Image.Image:
     return canvas
 
 
-def random_center_biased_square_crop(image: Image.Image, image_size: int) -> Image.Image:
+def random_center_biased_square_crop(
+    image: Image.Image,
+    image_size: int,
+    person_mask: Image.Image | None = None,
+    skin_mask: Image.Image | None = None,
+    costume_mask: Image.Image | None = None,
+) -> tuple[Image.Image, Image.Image | None, Image.Image | None, Image.Image | None]:
     width, height = image.size
     min_side = min(width, height)
     crop_side = int(min_side * random.uniform(0.82, 1.0))
@@ -928,7 +1018,7 @@ def random_center_biased_square_crop(image: Image.Image, image_size: int) -> Ima
     jitter_top = max_top * 0.12
     left = int(round(min(max(random.uniform(center_left - jitter_left, center_left + jitter_left), 0.0), max_left)))
     top = int(round(min(max(random.uniform(center_top - jitter_top, center_top + jitter_top), 0.0), max_top)))
-    return TF.resized_crop(
+    image_crop = TF.resized_crop(
         image,
         top,
         left,
@@ -938,6 +1028,48 @@ def random_center_biased_square_crop(image: Image.Image, image_size: int) -> Ima
         interpolation=InterpolationMode.BICUBIC,
         antialias=True,
     )
+    person_crop = resize_mask_crop(person_mask, top, left, crop_side, image_size)
+    skin_crop = resize_mask_crop(skin_mask, top, left, crop_side, image_size)
+    costume_crop = resize_mask_crop(costume_mask, top, left, crop_side, image_size)
+    return image_crop, person_crop, skin_crop, costume_crop
+
+
+def resize_mask_crop(
+    mask: Image.Image | None,
+    top: int,
+    left: int,
+    crop_side: int,
+    image_size: int,
+) -> Image.Image | None:
+    if mask is None:
+        return None
+    return TF.resized_crop(
+        mask,
+        top,
+        left,
+        crop_side,
+        crop_side,
+        size=[image_size, image_size],
+        interpolation=InterpolationMode.BILINEAR,
+        antialias=True,
+    )
+
+
+def mask_to_tensor(mask: Image.Image | None, image_size: int) -> torch.Tensor:
+    if mask is None:
+        return torch.zeros(1, image_size, image_size, dtype=torch.float32)
+    tensor = TF.to_tensor(mask)
+    return tensor.clamp(0.0, 1.0)
+
+
+def resolve_mask_root(mask_root_arg: str | None, manifest_path: Path) -> Path | None:
+    if mask_root_arg:
+        candidate = Path(mask_root_arg).expanduser().resolve()
+        return candidate
+    candidate = manifest_path.parent / "masks"
+    if candidate.exists():
+        return candidate.resolve()
+    return None
 
 
 def seed_everything(seed: int) -> None:

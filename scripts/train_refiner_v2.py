@@ -13,7 +13,7 @@ import time
 from PIL import Image, ImageOps
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms import functional as TF
 
@@ -47,6 +47,7 @@ class RefinerEpochMetrics:
     train_skin_rgb: float
     train_skin_hue: float
     train_costume_rgb: float
+    train_costume_hue: float
     train_costume_vividness: float
     val_loss: float
     val_delta_l1: float
@@ -54,6 +55,7 @@ class RefinerEpochMetrics:
     val_skin_rgb: float
     val_skin_hue: float
     val_costume_rgb: float
+    val_costume_hue: float
     val_costume_vividness: float
     epoch_seconds: float
 
@@ -89,8 +91,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skin-rgb-weight", type=float, default=0.18)
     parser.add_argument("--skin-hue-weight", type=float, default=0.18)
     parser.add_argument("--costume-rgb-weight", type=float, default=0.24)
+    parser.add_argument("--costume-hue-weight", type=float, default=0.18)
     parser.add_argument("--costume-vividness-weight", type=float, default=0.20)
     parser.add_argument("--costume-vividness-threshold", type=float, default=0.18)
+    parser.add_argument("--actor-sampler-power", type=float, default=0.0)
+    parser.add_argument("--actor-sampler-mask-size", type=int, default=32)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--resume-from", default=None)
     parser.add_argument("--save-every-epoch", action="store_true")
@@ -125,7 +130,15 @@ def main() -> int:
 
     train_dataset = RefinerDataset(train_samples, image_size=args.image_size, train=True, base_root=base_root, mask_root=mask_root)
     val_dataset = RefinerDataset(val_samples, image_size=args.image_size, train=False, base_root=base_root, mask_root=mask_root)
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=False)
+    train_sampler = build_train_sampler(dataset=train_dataset, args=args)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
+        num_workers=args.num_workers,
+        pin_memory=False,
+    )
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=False)
 
     model = CostumeRefinerUNet(input_channels=4, base_channels=args.base_channels, ab_delta_scale=args.ab_delta_scale).to(device)
@@ -166,6 +179,7 @@ def main() -> int:
             train_skin_rgb=train_metrics["skin_rgb"],
             train_skin_hue=train_metrics["skin_hue"],
             train_costume_rgb=train_metrics["costume_rgb"],
+            train_costume_hue=train_metrics["costume_hue"],
             train_costume_vividness=train_metrics["costume_vividness"],
             val_loss=val_metrics["loss"],
             val_delta_l1=val_metrics["delta_l1"],
@@ -173,6 +187,7 @@ def main() -> int:
             val_skin_rgb=val_metrics["skin_rgb"],
             val_skin_hue=val_metrics["skin_hue"],
             val_costume_rgb=val_metrics["costume_rgb"],
+            val_costume_hue=val_metrics["costume_hue"],
             val_costume_vividness=val_metrics["costume_vividness"],
             epoch_seconds=time.perf_counter() - epoch_started,
         )
@@ -192,7 +207,8 @@ def main() -> int:
             f"epoch {epoch:02d} train_loss={metrics.train_loss:.4f} val_loss={metrics.val_loss:.4f} "
             f"delta={metrics.val_delta_l1:.4f} bg={metrics.val_bg_identity:.4f} "
             f"skin_rgb={metrics.val_skin_rgb:.4f} skin_hue={metrics.val_skin_hue:.4f} "
-            f"costume_rgb={metrics.val_costume_rgb:.4f} time={metrics.epoch_seconds/60.0:.1f}m"
+            f"costume_rgb={metrics.val_costume_rgb:.4f} costume_hue={metrics.val_costume_hue:.4f} "
+            f"time={metrics.epoch_seconds/60.0:.1f}m"
         )
 
     log(f"Best checkpoint: {best_checkpoint_path}")
@@ -262,6 +278,28 @@ class RefinerDataset(Dataset):
         if not path.exists():
             return None
         return Image.open(path).convert("L")
+
+    def load_mask_mean(self, mask_type: str, index: int, size: int) -> float:
+        sample = self.samples[index]
+        mask = self._load_mask(mask_type, sample)
+        if mask is None:
+            return 0.0
+        resized = mask.resize((size, size), Image.Resampling.BILINEAR)
+        return float(TF.to_tensor(resized).mean().item())
+
+
+def build_train_sampler(dataset: RefinerDataset, args: argparse.Namespace) -> WeightedRandomSampler | None:
+    if (not dataset.train) or dataset.mask_root is None or float(args.actor_sampler_power) <= 0.0:
+        return None
+    mask_size = max(8, int(args.actor_sampler_mask_size))
+    weights: list[float] = []
+    for index in range(len(dataset)):
+        person_mean = dataset.load_mask_mean("person", index, mask_size)
+        skin_mean = dataset.load_mask_mean("skin", index, mask_size)
+        costume_mean = dataset.load_mask_mean("costume", index, mask_size)
+        actor_score = (0.45 * person_mean) + (0.60 * skin_mean) + (1.40 * costume_mean)
+        weights.append(1.0 + float(args.actor_sampler_power) * actor_score)
+    return WeightedRandomSampler(weights=torch.tensor(weights, dtype=torch.double), num_samples=len(dataset), replacement=True)
 
 
 def fit_optional_mask(mask: Image.Image | None, image_size: int) -> Image.Image | None:
@@ -400,6 +438,18 @@ def compute_losses(
     if torch.count_nonzero(costume_mask).item() > 0:
         costume_rgb = weighted_mean(torch.abs(refined_rgb - target_rgb), costume_mask)
 
+    costume_hue = torch.zeros((), device=base_rgb.device, dtype=base_rgb.dtype)
+    if torch.count_nonzero(costume_mask).item() > 0:
+        target_chroma = target_lab[:, 1:3]
+        refined_chroma = refined_lab[:, 1:3]
+        target_sat = torch.sqrt(torch.sum(target_chroma.square(), dim=1, keepdim=True) + 1e-6)
+        refined_sat = torch.sqrt(torch.sum(refined_chroma.square(), dim=1, keepdim=True) + 1e-6)
+        target_unit = target_chroma / target_sat.clamp_min(1e-4)
+        refined_unit = refined_chroma / refined_sat.clamp_min(1e-4)
+        hue_alignment = 1.0 - torch.sum(target_unit * refined_unit, dim=1, keepdim=True).clamp(-1.0, 1.0)
+        colorful_costume_mask = costume_mask * (target_sat > float(args.costume_vividness_threshold)).to(target_sat.dtype)
+        costume_hue = weighted_mean(hue_alignment, colorful_costume_mask)
+
     costume_vividness = torch.zeros((), device=base_rgb.device, dtype=base_rgb.dtype)
     if torch.count_nonzero(costume_mask).item() > 0:
         target_sat = torch.sqrt(torch.sum(target_lab[:, 1:3].square(), dim=1, keepdim=True) + 1e-6)
@@ -415,6 +465,7 @@ def compute_losses(
         + float(args.skin_rgb_weight) * skin_rgb
         + float(args.skin_hue_weight) * skin_hue
         + float(args.costume_rgb_weight) * costume_rgb
+        + float(args.costume_hue_weight) * costume_hue
         + float(args.costume_vividness_weight) * costume_vividness
     )
     return {
@@ -424,6 +475,7 @@ def compute_losses(
         "skin_rgb": skin_rgb,
         "skin_hue": skin_hue,
         "costume_rgb": costume_rgb,
+        "costume_hue": costume_hue,
         "costume_vividness": costume_vividness,
     }
 

@@ -44,12 +44,16 @@ class RefinerEpochMetrics:
     train_loss: float
     train_delta_l1: float
     train_bg_identity: float
+    train_skin_rgb: float
     train_skin_hue: float
+    train_costume_rgb: float
     train_costume_vividness: float
     val_loss: float
     val_delta_l1: float
     val_bg_identity: float
+    val_skin_rgb: float
     val_skin_hue: float
+    val_costume_rgb: float
     val_costume_vividness: float
     epoch_seconds: float
 
@@ -82,7 +86,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--focus-delta-boost", type=float, default=2.0)
     parser.add_argument("--global-rgb-weight", type=float, default=0.20)
     parser.add_argument("--background-identity-weight", type=float, default=0.55)
+    parser.add_argument("--skin-rgb-weight", type=float, default=0.18)
     parser.add_argument("--skin-hue-weight", type=float, default=0.18)
+    parser.add_argument("--costume-rgb-weight", type=float, default=0.24)
     parser.add_argument("--costume-vividness-weight", type=float, default=0.20)
     parser.add_argument("--costume-vividness-threshold", type=float, default=0.18)
     parser.add_argument("--resume", action="store_true")
@@ -157,12 +163,16 @@ def main() -> int:
             train_loss=train_metrics["loss"],
             train_delta_l1=train_metrics["delta_l1"],
             train_bg_identity=train_metrics["bg_identity"],
+            train_skin_rgb=train_metrics["skin_rgb"],
             train_skin_hue=train_metrics["skin_hue"],
+            train_costume_rgb=train_metrics["costume_rgb"],
             train_costume_vividness=train_metrics["costume_vividness"],
             val_loss=val_metrics["loss"],
             val_delta_l1=val_metrics["delta_l1"],
             val_bg_identity=val_metrics["bg_identity"],
+            val_skin_rgb=val_metrics["skin_rgb"],
             val_skin_hue=val_metrics["skin_hue"],
+            val_costume_rgb=val_metrics["costume_rgb"],
             val_costume_vividness=val_metrics["costume_vividness"],
             epoch_seconds=time.perf_counter() - epoch_started,
         )
@@ -180,7 +190,9 @@ def main() -> int:
         write_summary(output_dir / "summary.json", best_val_loss=best_val_loss, history=history, manifest_path=manifest_path, base_root=base_root)
         log(
             f"epoch {epoch:02d} train_loss={metrics.train_loss:.4f} val_loss={metrics.val_loss:.4f} "
-            f"delta={metrics.val_delta_l1:.4f} bg={metrics.val_bg_identity:.4f} skin={metrics.val_skin_hue:.4f} time={metrics.epoch_seconds/60.0:.1f}m"
+            f"delta={metrics.val_delta_l1:.4f} bg={metrics.val_bg_identity:.4f} "
+            f"skin_rgb={metrics.val_skin_rgb:.4f} skin_hue={metrics.val_skin_hue:.4f} "
+            f"costume_rgb={metrics.val_costume_rgb:.4f} time={metrics.epoch_seconds/60.0:.1f}m"
         )
 
     log(f"Best checkpoint: {best_checkpoint_path}")
@@ -369,6 +381,10 @@ def compute_losses(
     global_rgb = torch.mean(torch.abs(refined_rgb - target_rgb))
     bg_identity = weighted_mean(torch.abs(predicted_delta_ab), background_mask)
 
+    skin_rgb = torch.zeros((), device=base_rgb.device, dtype=base_rgb.dtype)
+    if torch.count_nonzero(skin_mask).item() > 0:
+        skin_rgb = weighted_mean(torch.abs(refined_rgb - target_rgb), skin_mask)
+
     skin_hue = torch.zeros((), device=base_rgb.device, dtype=base_rgb.dtype)
     if torch.count_nonzero(skin_mask).item() > 0:
         target_chroma = target_lab[:, 1:3]
@@ -379,6 +395,10 @@ def compute_losses(
         refined_unit = refined_chroma / refined_norm.clamp_min(1e-4)
         alignment = 1.0 - torch.sum(target_unit * refined_unit, dim=1, keepdim=True).clamp(-1.0, 1.0)
         skin_hue = weighted_mean(alignment, skin_mask)
+
+    costume_rgb = torch.zeros((), device=base_rgb.device, dtype=base_rgb.dtype)
+    if torch.count_nonzero(costume_mask).item() > 0:
+        costume_rgb = weighted_mean(torch.abs(refined_rgb - target_rgb), costume_mask)
 
     costume_vividness = torch.zeros((), device=base_rgb.device, dtype=base_rgb.dtype)
     if torch.count_nonzero(costume_mask).item() > 0:
@@ -392,14 +412,18 @@ def compute_losses(
         float(args.delta_loss_weight) * delta_l1
         + float(args.global_rgb_weight) * global_rgb
         + float(args.background_identity_weight) * bg_identity
+        + float(args.skin_rgb_weight) * skin_rgb
         + float(args.skin_hue_weight) * skin_hue
+        + float(args.costume_rgb_weight) * costume_rgb
         + float(args.costume_vividness_weight) * costume_vividness
     )
     return {
         "loss": loss,
         "delta_l1": delta_l1,
         "bg_identity": bg_identity,
+        "skin_rgb": skin_rgb,
         "skin_hue": skin_hue,
+        "costume_rgb": costume_rgb,
         "costume_vividness": costume_vividness,
     }
 

@@ -45,12 +45,9 @@ def delta_ab_from_lab(*, base_lab: Tensor, target_lab: Tensor) -> Tensor:
 
 
 def apply_delta_ab(*, base_lab: Tensor, delta_ab: Tensor) -> Tensor:
-    refined = base_lab.clone()
-    refined[:, 1:3] = refined[:, 1:3] + delta_ab
-    refined[:, 0:1] = refined[:, 0:1].clamp(0.0, 100.0)
-    refined[:, 1:2] = refined[:, 1:2].clamp(-127.0, 127.0)
-    refined[:, 2:3] = refined[:, 2:3].clamp(-127.0, 127.0)
-    return refined
+    l_channel = base_lab[:, 0:1].clamp(0.0, 100.0)
+    ab_channels = (base_lab[:, 1:3] + delta_ab).clamp(-127.0, 127.0)
+    return torch.cat([l_channel, ab_channels], dim=1)
 
 
 def feather_mask(mask: Tensor, kernel_size: int = 9) -> Tensor:

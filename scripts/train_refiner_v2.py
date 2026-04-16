@@ -72,6 +72,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--base-root", required=True, help="Root directory containing cached base DeOldify outputs.")
     parser.add_argument("--mask-root", default=None, help="Optional person/skin/costume mask root.")
+    parser.add_argument("--input-mask-root", default=None, help="Optional root for the mask channel fed into a 5-channel refiner.")
+    parser.add_argument(
+        "--input-mask-type",
+        choices=["person", "skin", "costume"],
+        default="person",
+        help="Mask type used as the extra model input when input-channels=5.",
+    )
     parser.add_argument("--output-dir", default="models/refiner/v2")
     parser.add_argument("--epochs", type=int, default=6)
     parser.add_argument("--image-size", type=int, default=256)
@@ -81,6 +88,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--device", choices=["mps", "cpu"], default="mps")
     parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument("--input-channels", type=int, choices=[4, 5], default=4)
     parser.add_argument("--base-channels", type=int, default=32)
     parser.add_argument("--ab-delta-scale", type=float, default=24.0)
     parser.add_argument("--bottleneck-blocks", type=int, default=2)
@@ -101,6 +109,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--actor-sampler-mask-size", type=int, default=32)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--resume-from", default=None)
+    parser.add_argument("--init-from-checkpoint", default=None, help="Optional checkpoint used to initialize model weights before training.")
     parser.add_argument("--save-every-epoch", action="store_true")
     return parser.parse_args()
 
@@ -117,9 +126,13 @@ def main() -> int:
     base_root = Path(args.base_root).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
     mask_root = Path(args.mask_root).expanduser().resolve() if args.mask_root else None
+    input_mask_root = Path(args.input_mask_root).expanduser().resolve() if args.input_mask_root else None
     output_dir.mkdir(parents=True, exist_ok=True)
     preview_dir = output_dir / "previews"
     preview_dir.mkdir(parents=True, exist_ok=True)
+
+    if int(args.input_channels) > 4 and input_mask_root is None and mask_root is None:
+        raise ValueError("A 5-channel refiner requires --input-mask-root or --mask-root so the extra mask channel is available.")
 
     samples = load_manifest(manifest_path)
     train_samples = [sample for sample in samples if sample.split == "train"]
@@ -130,9 +143,26 @@ def main() -> int:
     log(f"Val samples:   {len(val_samples)}")
     log(f"Base root:     {base_root}")
     log(f"Mask root:     {mask_root if mask_root else 'disabled'}")
+    log(f"Input masks:   {input_mask_root if input_mask_root else f'mask-root:{args.input_mask_type}' if int(args.input_channels) > 4 else 'disabled'}")
 
-    train_dataset = RefinerDataset(train_samples, image_size=args.image_size, train=True, base_root=base_root, mask_root=mask_root)
-    val_dataset = RefinerDataset(val_samples, image_size=args.image_size, train=False, base_root=base_root, mask_root=mask_root)
+    train_dataset = RefinerDataset(
+        train_samples,
+        image_size=args.image_size,
+        train=True,
+        base_root=base_root,
+        mask_root=mask_root,
+        input_mask_root=input_mask_root,
+        input_mask_type=str(args.input_mask_type),
+    )
+    val_dataset = RefinerDataset(
+        val_samples,
+        image_size=args.image_size,
+        train=False,
+        base_root=base_root,
+        mask_root=mask_root,
+        input_mask_root=input_mask_root,
+        input_mask_type=str(args.input_mask_type),
+    )
     train_sampler = build_train_sampler(dataset=train_dataset, args=args)
     train_loader = DataLoader(
         train_dataset,
@@ -145,13 +175,18 @@ def main() -> int:
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=False)
 
     model = CostumeRefinerUNet(
-        input_channels=4,
+        input_channels=int(args.input_channels),
         base_channels=args.base_channels,
         ab_delta_scale=args.ab_delta_scale,
         bottleneck_blocks=args.bottleneck_blocks,
         decoder_residual_blocks=args.decoder_residual_blocks,
         channel_attention=args.channel_attention,
     ).to(device)
+    if args.init_from_checkpoint and not args.resume and not args.resume_from:
+        initialize_model_from_checkpoint(
+            model=model,
+            checkpoint_path=Path(args.init_from_checkpoint).expanduser().resolve(),
+        )
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(args.epochs, 1))
 
@@ -226,12 +261,23 @@ def main() -> int:
 
 
 class RefinerDataset(Dataset):
-    def __init__(self, samples: list, image_size: int, train: bool, base_root: Path, mask_root: Path | None):
+    def __init__(
+        self,
+        samples: list,
+        image_size: int,
+        train: bool,
+        base_root: Path,
+        mask_root: Path | None,
+        input_mask_root: Path | None,
+        input_mask_type: str,
+    ):
         self.samples = samples
         self.image_size = image_size
         self.train = train
         self.base_root = base_root
         self.mask_root = mask_root
+        self.input_mask_root = input_mask_root
+        self.input_mask_type = input_mask_type
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -243,14 +289,16 @@ class RefinerDataset(Dataset):
         person_mask = self._load_mask("person", sample)
         skin_mask = self._load_mask("skin", sample)
         costume_mask = self._load_mask("costume", sample)
+        input_mask = self._load_input_mask(sample)
         if self.train:
-            target, base, person_mask, skin_mask, costume_mask = paired_random_center_biased_square_crop(
+            target, base, person_mask, skin_mask, costume_mask, input_mask = paired_random_center_biased_square_crop(
                 target,
                 base,
                 self.image_size,
                 person_mask,
                 skin_mask,
                 costume_mask,
+                input_mask,
             )
             if random.random() < 0.5:
                 target = ImageOps.mirror(target)
@@ -261,12 +309,15 @@ class RefinerDataset(Dataset):
                     skin_mask = ImageOps.mirror(skin_mask)
                 if costume_mask is not None:
                     costume_mask = ImageOps.mirror(costume_mask)
+                if input_mask is not None:
+                    input_mask = ImageOps.mirror(input_mask)
         else:
             target = ImageOps.fit(target, (self.image_size, self.image_size), method=Image.Resampling.BICUBIC, centering=(0.5, 0.5))
             base = ImageOps.fit(base, (self.image_size, self.image_size), method=Image.Resampling.BICUBIC, centering=(0.5, 0.5))
             person_mask = fit_optional_mask(person_mask, self.image_size)
             skin_mask = fit_optional_mask(skin_mask, self.image_size)
             costume_mask = fit_optional_mask(costume_mask, self.image_size)
+            input_mask = fit_optional_mask(input_mask, self.image_size)
 
         target_rgb = TF.to_tensor(target)
         base_rgb = TF.to_tensor(base)
@@ -278,6 +329,7 @@ class RefinerDataset(Dataset):
             "person_mask": mask_to_tensor(person_mask, self.image_size),
             "skin_mask": mask_to_tensor(skin_mask, self.image_size),
             "costume_mask": mask_to_tensor(costume_mask, self.image_size),
+            "input_mask": mask_to_tensor(input_mask, self.image_size),
             "image_path": sample.image_path,
         }
 
@@ -288,6 +340,14 @@ class RefinerDataset(Dataset):
         if not path.exists():
             return None
         return Image.open(path).convert("L")
+
+    def _load_input_mask(self, sample) -> Image.Image | None:
+        if self.input_mask_root is not None:
+            path = self.input_mask_root / self.input_mask_type / sample.split / Path(sample.image_path).name
+            if path.exists():
+                return Image.open(path).convert("L")
+            return None
+        return self._load_mask(self.input_mask_type, sample)
 
     def load_mask_mean(self, mask_type: str, index: int, size: int) -> float:
         sample = self.samples[index]
@@ -325,7 +385,8 @@ def paired_random_center_biased_square_crop(
     person_mask: Image.Image | None,
     skin_mask: Image.Image | None,
     costume_mask: Image.Image | None,
-) -> tuple[Image.Image, Image.Image, Image.Image | None, Image.Image | None, Image.Image | None]:
+    input_mask: Image.Image | None,
+) -> tuple[Image.Image, Image.Image, Image.Image | None, Image.Image | None, Image.Image | None, Image.Image | None]:
     width, height = target.size
     min_side = min(width, height)
     crop_side = int(min_side * random.uniform(0.82, 1.0))
@@ -342,7 +403,8 @@ def paired_random_center_biased_square_crop(
     person_crop = resize_mask_crop(person_mask, top, left, crop_side, image_size)
     skin_crop = resize_mask_crop(skin_mask, top, left, crop_side, image_size)
     costume_crop = resize_mask_crop(costume_mask, top, left, crop_side, image_size)
-    return target_crop, base_crop, person_crop, skin_crop, costume_crop
+    input_crop = resize_mask_crop(input_mask, top, left, crop_side, image_size)
+    return target_crop, base_crop, person_crop, skin_crop, costume_crop, input_crop
 
 
 def resize_mask_crop(mask: Image.Image | None, top: int, left: int, crop_side: int, image_size: int) -> Image.Image | None:
@@ -376,7 +438,12 @@ def run_epoch(
         person_mask = batch["person_mask"].to(device)
         skin_mask = batch["skin_mask"].to(device)
         costume_mask = batch["costume_mask"].to(device)
-        model_input = compose_refiner_input(base_rgb=base_rgb, gray_rgb=gray_rgb)
+        input_mask = batch["input_mask"].to(device)
+        model_input = compose_refiner_input(
+            base_rgb=base_rgb,
+            gray_rgb=gray_rgb,
+            mask=input_mask if int(args.input_channels) > 4 else None,
+        )
         predicted_delta_ab = model(model_input)
         losses = compute_losses(
             predicted_delta_ab=predicted_delta_ab,
@@ -385,6 +452,7 @@ def run_epoch(
             person_mask=person_mask,
             skin_mask=skin_mask,
             costume_mask=costume_mask,
+            input_mask=input_mask if int(args.input_channels) > 4 else None,
             args=args,
         )
         loss = losses["loss"]
@@ -408,6 +476,7 @@ def compute_losses(
     person_mask: torch.Tensor,
     skin_mask: torch.Tensor,
     costume_mask: torch.Tensor,
+    input_mask: torch.Tensor | None,
     args: argparse.Namespace,
 ) -> dict[str, torch.Tensor]:
     base_lab = rgb_to_lab_tensor(base_rgb)
@@ -420,7 +489,7 @@ def compute_losses(
         focus_mask = torch.ones_like(person_mask)
     background_mask = (1.0 - focus_mask).clamp(0.0, 1.0)
 
-    refined_rgb = apply_refiner_delta(base_rgb=base_rgb, predicted_delta_ab=predicted_delta_ab)
+    refined_rgb = apply_refiner_delta(base_rgb=base_rgb, predicted_delta_ab=predicted_delta_ab, mask=input_mask)
     refined_lab = rgb_to_lab_tensor(refined_rgb)
     refined_delta_ab = delta_ab_from_lab(base_lab=base_lab, target_lab=refined_lab)
 
@@ -499,10 +568,21 @@ def render_preview(*, model: nn.Module, batch: dict[str, torch.Tensor | list[str
     model.eval()
     base_rgb = batch["base_rgb"][:preview_count].to(device)
     gray_rgb = batch["gray_rgb"][:preview_count].to(device)
+    input_mask = batch["input_mask"][:preview_count].to(device)
     target_rgb = batch["target_rgb"][:preview_count]
     with torch.no_grad():
-        predicted = model(compose_refiner_input(base_rgb=base_rgb, gray_rgb=gray_rgb))
-        refined_rgb = apply_refiner_delta(base_rgb=base_rgb, predicted_delta_ab=predicted).cpu()
+        predicted = model(
+            compose_refiner_input(
+                base_rgb=base_rgb,
+                gray_rgb=gray_rgb,
+                mask=input_mask if int(getattr(model, "down1").conv[0].in_channels) > 4 else None,
+            )
+        )
+        refined_rgb = apply_refiner_delta(
+            base_rgb=base_rgb,
+            predicted_delta_ab=predicted,
+            mask=input_mask if int(getattr(model, "down1").conv[0].in_channels) > 4 else None,
+        ).cpu()
     rows = []
     for gray, base, refined, target in zip(gray_rgb.cpu(), base_rgb.cpu(), refined_rgb, target_rgb, strict=True):
         rows.append(stitch_quad(gray, base, refined, target))
@@ -541,7 +621,7 @@ def save_checkpoint(path: Path, model: nn.Module, args: argparse.Namespace, epoc
             "epoch": epoch,
             "metrics": asdict(metrics),
             "model_args": {
-                "input_channels": 4,
+                "input_channels": int(args.input_channels),
                 "base_channels": int(args.base_channels),
                 "ab_delta_scale": float(args.ab_delta_scale),
                 "bottleneck_blocks": int(args.bottleneck_blocks),
@@ -602,6 +682,55 @@ def write_summary(path: Path, *, best_val_loss: float, history: list[RefinerEpoc
         ),
         encoding="utf-8",
     )
+
+
+def initialize_model_from_checkpoint(*, model: nn.Module, checkpoint_path: Path) -> None:
+    with torch.serialization.safe_globals([slice]):
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    if "model" not in checkpoint:
+        raise KeyError(f"Checkpoint does not contain model weights: {checkpoint_path}")
+    source_state = normalize_legacy_refiner_state_dict(checkpoint["model"])
+    target_state = model.state_dict()
+    loaded_state = dict(target_state)
+    copied_keys = 0
+    adapted_keys = 0
+    missing_keys: list[str] = []
+
+    for key, target_tensor in target_state.items():
+        source_tensor = source_state.get(key)
+        if source_tensor is None:
+            missing_keys.append(key)
+            continue
+        if source_tensor.shape == target_tensor.shape:
+            loaded_state[key] = source_tensor
+            copied_keys += 1
+            continue
+        if key == "down1.conv.0.weight" and source_tensor.ndim == 4 and target_tensor.ndim == 4:
+            adapted = target_tensor.clone()
+            adapted.zero_()
+            common_in = min(source_tensor.shape[1], target_tensor.shape[1])
+            adapted[:, :common_in, :, :] = source_tensor[:, :common_in, :, :]
+            loaded_state[key] = adapted
+            adapted_keys += 1
+            continue
+        missing_keys.append(key)
+
+    model.load_state_dict(loaded_state, strict=False)
+    log(
+        f"Initialized from {checkpoint_path} with {copied_keys} exact tensors and {adapted_keys} adapted tensors; "
+        f"{len(missing_keys)} tensors kept from default init."
+    )
+
+
+def normalize_legacy_refiner_state_dict(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    if any(".residual.0.block." in key for key in state_dict):
+        return state_dict
+    if not any(".residual.block." in key for key in state_dict):
+        return state_dict
+    remapped: dict[str, torch.Tensor] = {}
+    for key, value in state_dict.items():
+        remapped[key.replace(".residual.block.", ".residual.0.block.")] = value
+    return remapped
 
 
 if __name__ == "__main__":

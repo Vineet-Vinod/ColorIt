@@ -107,6 +107,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--costume-vividness-threshold", type=float, default=0.18)
     parser.add_argument("--actor-sampler-power", type=float, default=0.0)
     parser.add_argument("--actor-sampler-mask-size", type=int, default=32)
+    parser.add_argument("--costume-red-sampler-power", type=float, default=0.0)
+    parser.add_argument(
+        "--costume-loss-focus",
+        choices=["all", "warm_red_vivid"],
+        default="all",
+        help="Optional focus mask for costume supervision.",
+    )
+    parser.add_argument("--costume-red-min-a-delta", type=float, default=4.0)
+    parser.add_argument("--costume-red-min-sat-delta", type=float, default=4.0)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--resume-from", default=None)
     parser.add_argument("--init-from-checkpoint", default=None, help="Optional checkpoint used to initialize model weights before training.")
@@ -357,18 +366,70 @@ class RefinerDataset(Dataset):
         resized = mask.resize((size, size), Image.Resampling.BILINEAR)
         return float(TF.to_tensor(resized).mean().item())
 
+    def load_costume_red_opportunity_score(
+        self,
+        *,
+        index: int,
+        size: int,
+        min_a_delta: float,
+        min_sat_delta: float,
+    ) -> float:
+        sample = self.samples[index]
+        costume_mask = self._load_mask("costume", sample)
+        if costume_mask is None:
+            return 0.0
+        mask_resized = costume_mask.resize((size, size), Image.Resampling.BILINEAR)
+        mask_tensor = TF.to_tensor(mask_resized)
+        if float(mask_tensor.mean().item()) < 0.01:
+            return 0.0
+
+        target = Image.open(sample.image_path).convert("RGB").resize((size, size), Image.Resampling.BICUBIC)
+        base = Image.open(self.base_root / sample.split / Path(sample.image_path).name).convert("RGB").resize((size, size), Image.Resampling.BICUBIC)
+        target_lab = rgb_to_lab_tensor(TF.to_tensor(target).unsqueeze(0))
+        base_lab = rgb_to_lab_tensor(TF.to_tensor(base).unsqueeze(0))
+        red_focus = build_warm_red_vivid_mask(
+            target_lab=target_lab,
+            base_lab=base_lab,
+            costume_mask=mask_tensor.unsqueeze(0),
+            min_a_delta=min_a_delta,
+            min_sat_delta=min_sat_delta,
+        )
+        if torch.count_nonzero(red_focus).item() == 0:
+            return 0.0
+
+        delta_a = (target_lab[:, 1:2] - base_lab[:, 1:2]).clamp_min(0.0)
+        target_sat = torch.sqrt(torch.sum(target_lab[:, 1:3].square(), dim=1, keepdim=True) + 1e-6)
+        base_sat = torch.sqrt(torch.sum(base_lab[:, 1:3].square(), dim=1, keepdim=True) + 1e-6)
+        sat_gain = (target_sat - base_sat).clamp_min(0.0)
+        score = weighted_mean((0.7 * delta_a) + (0.3 * sat_gain), red_focus)
+        return float(score.detach().cpu().item() / 16.0)
+
 
 def build_train_sampler(dataset: RefinerDataset, args: argparse.Namespace) -> WeightedRandomSampler | None:
-    if (not dataset.train) or dataset.mask_root is None or float(args.actor_sampler_power) <= 0.0:
+    if (
+        not dataset.train
+        or dataset.mask_root is None
+        or (float(args.actor_sampler_power) <= 0.0 and float(args.costume_red_sampler_power) <= 0.0)
+    ):
         return None
     mask_size = max(8, int(args.actor_sampler_mask_size))
     weights: list[float] = []
     for index in range(len(dataset)):
-        person_mean = dataset.load_mask_mean("person", index, mask_size)
-        skin_mean = dataset.load_mask_mean("skin", index, mask_size)
-        costume_mean = dataset.load_mask_mean("costume", index, mask_size)
-        actor_score = (0.45 * person_mean) + (0.60 * skin_mean) + (1.40 * costume_mean)
-        weights.append(1.0 + float(args.actor_sampler_power) * actor_score)
+        weight = 1.0
+        if float(args.actor_sampler_power) > 0.0:
+            person_mean = dataset.load_mask_mean("person", index, mask_size)
+            skin_mean = dataset.load_mask_mean("skin", index, mask_size)
+            costume_mean = dataset.load_mask_mean("costume", index, mask_size)
+            actor_score = (0.45 * person_mean) + (0.60 * skin_mean) + (1.40 * costume_mean)
+            weight += float(args.actor_sampler_power) * actor_score
+        if float(args.costume_red_sampler_power) > 0.0:
+            weight += float(args.costume_red_sampler_power) * dataset.load_costume_red_opportunity_score(
+                index=index,
+                size=max(mask_size, 64),
+                min_a_delta=float(args.costume_red_min_a_delta),
+                min_sat_delta=float(args.costume_red_min_sat_delta),
+            )
+        weights.append(weight)
     return WeightedRandomSampler(weights=torch.tensor(weights, dtype=torch.double), num_samples=len(dataset), replacement=True)
 
 
@@ -513,12 +574,22 @@ def compute_losses(
         alignment = 1.0 - torch.sum(target_unit * refined_unit, dim=1, keepdim=True).clamp(-1.0, 1.0)
         skin_hue = weighted_mean(alignment, skin_mask)
 
+    effective_costume_mask = costume_mask
+    if str(args.costume_loss_focus) == "warm_red_vivid":
+        effective_costume_mask = build_warm_red_vivid_mask(
+            target_lab=target_lab,
+            base_lab=base_lab,
+            costume_mask=costume_mask,
+            min_a_delta=float(args.costume_red_min_a_delta),
+            min_sat_delta=float(args.costume_red_min_sat_delta),
+        )
+
     costume_rgb = torch.zeros((), device=base_rgb.device, dtype=base_rgb.dtype)
-    if torch.count_nonzero(costume_mask).item() > 0:
-        costume_rgb = weighted_mean(torch.abs(refined_rgb - target_rgb), costume_mask)
+    if torch.count_nonzero(effective_costume_mask).item() > 0:
+        costume_rgb = weighted_mean(torch.abs(refined_rgb - target_rgb), effective_costume_mask)
 
     costume_hue = torch.zeros((), device=base_rgb.device, dtype=base_rgb.dtype)
-    if torch.count_nonzero(costume_mask).item() > 0:
+    if torch.count_nonzero(effective_costume_mask).item() > 0:
         target_chroma = target_lab[:, 1:3]
         refined_chroma = refined_lab[:, 1:3]
         target_sat = torch.sqrt(torch.sum(target_chroma.square(), dim=1, keepdim=True) + 1e-6)
@@ -526,15 +597,15 @@ def compute_losses(
         target_unit = target_chroma / target_sat.clamp_min(1e-4)
         refined_unit = refined_chroma / refined_sat.clamp_min(1e-4)
         hue_alignment = 1.0 - torch.sum(target_unit * refined_unit, dim=1, keepdim=True).clamp(-1.0, 1.0)
-        colorful_costume_mask = costume_mask * (target_sat > float(args.costume_vividness_threshold)).to(target_sat.dtype)
+        colorful_costume_mask = effective_costume_mask * (target_sat > float(args.costume_vividness_threshold)).to(target_sat.dtype)
         costume_hue = weighted_mean(hue_alignment, colorful_costume_mask)
 
     costume_vividness = torch.zeros((), device=base_rgb.device, dtype=base_rgb.dtype)
-    if torch.count_nonzero(costume_mask).item() > 0:
+    if torch.count_nonzero(effective_costume_mask).item() > 0:
         target_sat = torch.sqrt(torch.sum(target_lab[:, 1:3].square(), dim=1, keepdim=True) + 1e-6)
         base_sat = torch.sqrt(torch.sum(base_lab[:, 1:3].square(), dim=1, keepdim=True) + 1e-6)
         refined_sat = torch.sqrt(torch.sum(refined_lab[:, 1:3].square(), dim=1, keepdim=True) + 1e-6)
-        vivid_mask = costume_mask * (target_sat > float(args.costume_vividness_threshold)).to(target_sat.dtype)
+        vivid_mask = effective_costume_mask * (target_sat > float(args.costume_vividness_threshold)).to(target_sat.dtype)
         costume_vividness = weighted_mean(torch.relu(target_sat - refined_sat) * (target_sat > base_sat).to(target_sat.dtype), vivid_mask)
 
     loss = (
@@ -562,6 +633,24 @@ def compute_losses(
 def weighted_mean(values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
     expanded = weights.expand(values.shape[0], values.shape[1], values.shape[2], values.shape[3])
     return (values * expanded).sum() / expanded.sum().clamp_min(1e-6)
+
+
+def build_warm_red_vivid_mask(
+    *,
+    target_lab: torch.Tensor,
+    base_lab: torch.Tensor,
+    costume_mask: torch.Tensor,
+    min_a_delta: float,
+    min_sat_delta: float,
+) -> torch.Tensor:
+    target_a = target_lab[:, 1:2]
+    base_a = base_lab[:, 1:2]
+    target_sat = torch.sqrt(torch.sum(target_lab[:, 1:3].square(), dim=1, keepdim=True) + 1e-6)
+    base_sat = torch.sqrt(torch.sum(base_lab[:, 1:3].square(), dim=1, keepdim=True) + 1e-6)
+    redder = (target_a - base_a) > float(min_a_delta)
+    more_vivid = (target_sat - base_sat) > float(min_sat_delta)
+    warm = target_a > 0.0
+    return costume_mask * (redder & more_vivid & warm).to(costume_mask.dtype)
 
 
 def render_preview(*, model: nn.Module, batch: dict[str, torch.Tensor | list[str]], device: torch.device, output_path: Path, preview_count: int) -> None:

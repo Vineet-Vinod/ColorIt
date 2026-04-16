@@ -11,6 +11,7 @@ from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.compress import run_compress_final
 from src.pipeline.config import load_config
 from src.pipeline.conv_opt import run_benchmark_convs, run_extract_conv_shapes
+from src.pipeline.exemplar_frame import run_exemplar_frame_experiment
 from src.pipeline.inference import colorize_image_file
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.probes import run_extract_probes
@@ -103,6 +104,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overwrite an existing output file.",
     )
     clip_parser.set_defaults(handler=handle_colorize_clip)
+
+    exemplar_parser = subparsers.add_parser(
+        "exemplar-frame",
+        help="Run a single-frame Deep Exemplar experiment against a target/reference movie pair.",
+    )
+    exemplar_parser.add_argument("--config", default="configs/quality.yaml")
+    exemplar_parser.add_argument("--movie", required=True, help="Target black-and-white movie path.")
+    exemplar_parser.add_argument("--time", required=True, help="Target frame timestamp in HH:MM:SS[.mmm].")
+    exemplar_parser.add_argument("--reference-movie", required=True, help="Reference color movie path.")
+    exemplar_parser.add_argument("--reference-time", required=True, help="Reference frame timestamp in HH:MM:SS[.mmm].")
+    exemplar_parser.add_argument(
+        "--output-root",
+        default=None,
+        help="Optional output directory override. Defaults under data/experiments/exemplar_frame/.",
+    )
+    exemplar_parser.add_argument(
+        "--blend-alpha",
+        type=float,
+        default=0.60,
+        help="Alpha used for the full-frame blend result.",
+    )
+    exemplar_parser.add_argument(
+        "--person-threshold",
+        type=float,
+        default=0.35,
+        help="Person-mask threshold used before deriving costume masks.",
+    )
+    exemplar_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite an existing experiment directory.",
+    )
+    exemplar_parser.set_defaults(handler=handle_exemplar_frame)
 
     probes_parser = subparsers.add_parser(
         "extract-probes",
@@ -414,6 +448,23 @@ def handle_colorize_clip(args: argparse.Namespace) -> int:
         output_path=Path(args.output),
         manifest_path=Path(args.manifest_path) if args.manifest_path else None,
         overwrite=args.overwrite,
+    )
+
+
+def handle_exemplar_frame(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).expanduser().resolve()
+    config = load_config(config_path)
+    return run_exemplar_frame_experiment(
+        config=config,
+        config_path=config_path,
+        target_movie_path=Path(args.movie),
+        target_time=str(args.time),
+        reference_movie_path=Path(args.reference_movie),
+        reference_time=str(args.reference_time),
+        output_root=Path(args.output_root) if args.output_root else None,
+        overwrite=bool(args.overwrite),
+        blend_alpha=float(args.blend_alpha),
+        person_threshold=float(args.person_threshold),
     )
 
 

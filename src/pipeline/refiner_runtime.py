@@ -47,7 +47,11 @@ def load_refiner_bundle(
         decoder_residual_blocks=decoder_residual_blocks,
         channel_attention=channel_attention,
     )
-    model.load_state_dict(checkpoint["model"], strict=True)
+    state_dict = _normalize_legacy_refiner_state_dict(
+        checkpoint["model"],
+        expected_keys=set(model.state_dict().keys()),
+    )
+    model.load_state_dict(state_dict, strict=True)
     model.to(device)
     model.eval()
     return RefinerBundle(
@@ -60,6 +64,24 @@ def load_refiner_bundle(
         decoder_residual_blocks=decoder_residual_blocks,
         channel_attention=channel_attention,
     )
+
+
+def _normalize_legacy_refiner_state_dict(
+    state_dict: dict[str, torch.Tensor],
+    *,
+    expected_keys: set[str],
+) -> dict[str, torch.Tensor]:
+    if any(".residual.0.block." in key for key in state_dict):
+        return state_dict
+    if not any(".residual.block." in key for key in state_dict):
+        return state_dict
+    if not any(".residual.0.block." in key for key in expected_keys):
+        return state_dict
+
+    remapped: dict[str, torch.Tensor] = {}
+    for key, value in state_dict.items():
+        remapped[key.replace(".residual.block.", ".residual.0.block.")] = value
+    return remapped
 
 
 def refine_base_pil(

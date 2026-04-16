@@ -17,6 +17,10 @@ class RefinerBundle:
     device: torch.device
     input_channels: int
     ab_delta_scale: float
+    base_channels: int
+    bottleneck_blocks: int
+    decoder_residual_blocks: int
+    channel_attention: bool
 
 
 def load_refiner_bundle(
@@ -32,10 +36,16 @@ def load_refiner_bundle(
     input_channels = int(model_args.get("input_channels", 4))
     base_channels = int(model_args.get("base_channels", 32))
     ab_delta_scale = float(model_args.get("ab_delta_scale", 24.0))
+    bottleneck_blocks = int(model_args.get("bottleneck_blocks", 2))
+    decoder_residual_blocks = int(model_args.get("decoder_residual_blocks", 1))
+    channel_attention = bool(model_args.get("channel_attention", False))
     model = CostumeRefinerUNet(
         input_channels=input_channels,
         base_channels=base_channels,
         ab_delta_scale=ab_delta_scale,
+        bottleneck_blocks=bottleneck_blocks,
+        decoder_residual_blocks=decoder_residual_blocks,
+        channel_attention=channel_attention,
     )
     model.load_state_dict(checkpoint["model"], strict=True)
     model.to(device)
@@ -45,6 +55,10 @@ def load_refiner_bundle(
         device=device,
         input_channels=input_channels,
         ab_delta_scale=ab_delta_scale,
+        base_channels=base_channels,
+        bottleneck_blocks=bottleneck_blocks,
+        decoder_residual_blocks=decoder_residual_blocks,
+        channel_attention=channel_attention,
     )
 
 

@@ -83,6 +83,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--base-channels", type=int, default=32)
     parser.add_argument("--ab-delta-scale", type=float, default=24.0)
+    parser.add_argument("--bottleneck-blocks", type=int, default=2)
+    parser.add_argument("--decoder-residual-blocks", type=int, default=1)
+    parser.add_argument("--channel-attention", action="store_true")
     parser.add_argument("--preview-count", type=int, default=6)
     parser.add_argument("--delta-loss-weight", type=float, default=1.0)
     parser.add_argument("--focus-delta-boost", type=float, default=2.0)
@@ -141,7 +144,14 @@ def main() -> int:
     )
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=False)
 
-    model = CostumeRefinerUNet(input_channels=4, base_channels=args.base_channels, ab_delta_scale=args.ab_delta_scale).to(device)
+    model = CostumeRefinerUNet(
+        input_channels=4,
+        base_channels=args.base_channels,
+        ab_delta_scale=args.ab_delta_scale,
+        bottleneck_blocks=args.bottleneck_blocks,
+        decoder_residual_blocks=args.decoder_residual_blocks,
+        channel_attention=args.channel_attention,
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(args.epochs, 1))
 
@@ -534,6 +544,9 @@ def save_checkpoint(path: Path, model: nn.Module, args: argparse.Namespace, epoc
                 "input_channels": 4,
                 "base_channels": int(args.base_channels),
                 "ab_delta_scale": float(args.ab_delta_scale),
+                "bottleneck_blocks": int(args.bottleneck_blocks),
+                "decoder_residual_blocks": int(args.decoder_residual_blocks),
+                "channel_attention": bool(args.channel_attention),
             },
             "args": vars(args),
         },

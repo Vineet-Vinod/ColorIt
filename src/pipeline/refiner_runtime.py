@@ -105,6 +105,14 @@ def refine_base_tensor(
     gray_rgb: torch.Tensor,
     mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
+    if bundle.input_channels > 4 and mask is None:
+        # 5-channel checkpoints are mask-conditioned; default to full-frame refinement
+        # when callers do not provide an explicit mask.
+        mask = torch.ones(
+            (base_rgb.shape[0], 1, base_rgb.shape[2], base_rgb.shape[3]),
+            device=base_rgb.device,
+            dtype=base_rgb.dtype,
+        )
     with torch.no_grad():
         model_input = compose_refiner_input(base_rgb=base_rgb, gray_rgb=gray_rgb, mask=mask if bundle.input_channels > 4 else None)
         predicted_delta = bundle.model(model_input)

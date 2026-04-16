@@ -10,6 +10,7 @@ __pycache__/
 # Model weights and generated media
 models/deoldify/*.pth
 models/deoldify/finetune/
+models/exemplar/
 models/refiner/
 data/colorized/
 data/final/

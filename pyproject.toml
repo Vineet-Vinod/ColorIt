@@ -1,7 +1,7 @@
 [project]
 name = "colorit"
 version = "0.1.0"
-description = "CLI-first pipeline scaffold for colorizing black-and-white Kannada films with DeOldify"
+description = "Movie-first DeOldify pipeline for black-and-white film colorization"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [

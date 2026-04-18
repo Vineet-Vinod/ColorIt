@@ -22,16 +22,9 @@ video:
   crf: 16
   pixel_format: yuv420p
 
-compression:
-  review_video_codec: libx264
-  review_preset: slow
-  review_crf: 22
-  review_audio_codec: aac
-  review_audio_bitrate: 128k
-  review_faststart: true
-
 scenes:
   detect: true
+  threshold: 0.60
   min_scene_seconds: 2.0
   max_scene_seconds: 90.0
   overlap_seconds: 0.0
@@ -60,10 +53,8 @@ postprocess:
     vividness_bias: 0.05
 
 paths:
-  source_dir: data/source
-  probe_dir: data/probe_clips
   scene_dir: data/scenes
+  frames_dir: data/frames
   colorized_dir: data/colorized
   manifest_dir: data/manifests
   final_dir: data/final
-  log_dir: data/logs

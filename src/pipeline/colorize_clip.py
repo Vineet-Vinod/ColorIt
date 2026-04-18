@@ -294,9 +294,9 @@ def run_colorize_clip_profiled(
     manifest_path = (
         manifest_path.expanduser().resolve()
         if manifest_path is not None
-        else paths.manifest_dir / "probe_runs.json"
+        else paths.manifest_dir / "clip_runs.json"
     )
-    update_probe_runs_manifest(manifest_path, record)
+    update_clip_runs_manifest(manifest_path, record)
     stage_profile = (
         ClipStageProfile(
             model_load_seconds=model_load_seconds,
@@ -487,7 +487,7 @@ def _read_exact(stream, size: int) -> bytes | None:
     return bytes(buffer)
 
 
-def update_probe_runs_manifest(manifest_path: Path, record: ClipRunRecord) -> None:
+def update_clip_runs_manifest(manifest_path: Path, record: ClipRunRecord) -> None:
     if manifest_path.exists():
         import json
 

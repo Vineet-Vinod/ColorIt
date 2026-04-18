@@ -9,22 +9,13 @@ __pycache__/
 
 # Model weights and generated media
 models/deoldify/*.pth
-models/deoldify/finetune/
-models/exemplar/
-models/refiner/
 data/colorized/
 data/final/
-data/finetune/
 data/frames/
-data/experiments/
-data/logs/
-data/probe_clips/*
 data/scenes/*
 data/manifests/*.json
 data/manifests/concat_*.txt
-optimize/artifacts/*
 
 # Allow directory placeholders
 !data/**/.gitkeep
 !models/deoldify/.gitkeep
-!optimize/artifacts/.gitkeep

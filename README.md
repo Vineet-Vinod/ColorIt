@@ -57,6 +57,16 @@ uv run colorit colorize-movie \
   --overwrite
 ```
 
+To resume an interrupted movie run from the saved scene and batch manifests:
+
+```bash
+uv run colorit colorize-movie \
+  --input /path/to/movie.mp4 \
+  --keep-intermediates \
+  --resume \
+  --overwrite
+```
+
 ## Configs
 
 - `configs/default.yaml`: base config for single-frame and single-clip work
@@ -67,4 +77,5 @@ The optimized path uses:
 - ffmpeg rawvideo piping instead of PNG frame round-trips
 - batched inference on MPS when available, with CPU fallback
 - one model load reused across the whole batch pass
+- scene, batch, and top-level movie manifests for deterministic resume
 - optional scene artifact cleanup after successful assembly

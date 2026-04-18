@@ -9,7 +9,7 @@ import numpy as np
 from src.pipeline.config import AppConfig
 from src.pipeline.ffmpeg_utils import ffprobe_media, open_rawvideo_reader, open_rawvideo_writer
 from src.pipeline.inference import colorize_rgb_batch
-from src.pipeline.manifest import write_json_manifest
+from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
 from src.pipeline.model_loader import ModelBundle, load_colorizer_bundle
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 
@@ -190,14 +190,19 @@ def _read_exact(stream, size: int) -> bytes | None:
 
 
 def update_clip_runs_manifest(manifest_path: Path, record: ClipRunRecord) -> None:
-    if manifest_path.exists():
-        import json
-
-        payload = json.loads(manifest_path.read_text())
-    else:
+    payload = load_json_manifest(manifest_path, {"runs": [], "updated_at": utc_now_iso()})
+    if not isinstance(payload, dict):
         payload = {"runs": []}
 
-    payload.setdefault("runs", []).append(asdict(record))
+    payload["updated_at"] = utc_now_iso()
+    runs = payload.setdefault("runs", [])
+    serialized = asdict(record)
+    for index, existing in enumerate(runs):
+        if existing.get("output_path") == record.output_path:
+            runs[index] = serialized
+            break
+    else:
+        runs.append(serialized)
     write_json_manifest(manifest_path, payload)
 
 

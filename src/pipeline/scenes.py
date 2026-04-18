@@ -74,6 +74,11 @@ def run_detect_scenes(
         "movie": str(movie_path),
         "config_path": str(config_path.resolve()),
         "threshold": threshold,
+        "scene_settings": {
+            "min_scene_seconds": min_scene_seconds,
+            "max_scene_seconds": max_scene_seconds,
+            "overlap_seconds": overlap_seconds,
+        },
         "scene_count": len(scene_units),
         "scenes": [asdict(scene) for scene in scene_units],
     }
@@ -183,6 +188,42 @@ def load_scene_manifest(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Scene manifest not found: {path}")
     return json.loads(path.read_text())
+
+
+def scene_manifest_matches(
+    manifest: dict[str, Any],
+    *,
+    movie_path: Path,
+    threshold: float,
+    min_scene_seconds: float,
+    max_scene_seconds: float,
+    overlap_seconds: float,
+) -> bool:
+    manifest_movie = manifest.get("movie")
+    if not manifest_movie:
+        return False
+
+    try:
+        manifest_path = Path(str(manifest_movie)).expanduser().resolve()
+    except Exception:
+        return False
+
+    if manifest_path != movie_path.expanduser().resolve():
+        return False
+
+    manifest_threshold = manifest.get("threshold")
+    if manifest_threshold is None or abs(float(manifest_threshold) - threshold) > 1e-9:
+        return False
+
+    scene_settings = manifest.get("scene_settings")
+    if not isinstance(scene_settings, dict):
+        return False
+
+    return (
+        abs(float(scene_settings.get("min_scene_seconds", -1.0)) - min_scene_seconds) <= 1e-9
+        and abs(float(scene_settings.get("max_scene_seconds", -1.0)) - max_scene_seconds) <= 1e-9
+        and abs(float(scene_settings.get("overlap_seconds", -1.0)) - overlap_seconds) <= 1e-9
+    )
 
 
 def seconds_to_timecode(value: float) -> str:

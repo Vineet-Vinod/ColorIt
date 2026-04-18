@@ -11,7 +11,6 @@ import numpy as np
 from PIL import Image
 
 from src.pipeline.config import AppConfig
-from src.pipeline.costume_palette import CostumePaletteRuntime, build_costume_palette_runtime
 from src.pipeline.ffmpeg_utils import (
     encode_video_from_frames,
     extract_frames,
@@ -61,7 +60,6 @@ class ClipStageProfile:
     inference_postprocess_graph_seconds: float
     inference_postprocess_download_seconds: float
     inference_postprocess_cpu_seconds: float
-    costume_palette_seconds: float
     temporal_smoothing_seconds: float
     frame_save_seconds: float
     encode_seconds: float
@@ -159,7 +157,6 @@ def run_colorize_clip_profiled(
     inference_postprocess_graph_seconds = 0.0
     inference_postprocess_download_seconds = 0.0
     inference_postprocess_cpu_seconds = 0.0
-    costume_palette_seconds = 0.0
     temporal_smoothing_seconds = 0.0
     frame_save_seconds = 0.0
     encode_seconds = 0.0
@@ -168,7 +165,6 @@ def run_colorize_clip_profiled(
     try:
         previous_smoothed_frame: np.ndarray | None = None
         postprocess_config = config.raw["postprocess"]
-        costume_palette_runtime = build_costume_palette_runtime(postprocess_config=postprocess_config, device=bundle.device)
         if frame_transport == "pipe":
             (
                 frame_count,
@@ -181,7 +177,6 @@ def run_colorize_clip_profiled(
                 inference_postprocess_graph_seconds,
                 inference_postprocess_download_seconds,
                 inference_postprocess_cpu_seconds,
-                costume_palette_seconds,
                 temporal_smoothing_seconds,
                 frame_save_seconds,
                 encode_seconds,
@@ -193,7 +188,6 @@ def run_colorize_clip_profiled(
                 bundle=bundle,
                 postprocess_config=postprocess_config,
                 collect_profile=collect_profile,
-                costume_palette_runtime=costume_palette_runtime,
             )
         else:
             extract_started = time.perf_counter()
@@ -233,13 +227,6 @@ def run_colorize_clip_profiled(
                         postprocess_config=postprocess_config,
                     )
                 result_np = np.asarray(result)
-                if costume_palette_runtime is not None:
-                    palette_started = time.perf_counter()
-                    result_np = costume_palette_runtime.apply(
-                        image_rgb=result_np,
-                        source_rgb=np.asarray(input_image),
-                    )
-                    costume_palette_seconds += time.perf_counter() - palette_started
                 if bool(postprocess_config.get("temporal_smoothing", False)):
                     temporal_started = time.perf_counter()
                     result_np, previous_smoothed_frame = apply_temporal_smoothing(
@@ -310,7 +297,6 @@ def run_colorize_clip_profiled(
             inference_postprocess_graph_seconds=inference_postprocess_graph_seconds,
             inference_postprocess_download_seconds=inference_postprocess_download_seconds,
             inference_postprocess_cpu_seconds=inference_postprocess_cpu_seconds,
-            costume_palette_seconds=costume_palette_seconds,
             temporal_smoothing_seconds=temporal_smoothing_seconds,
             frame_save_seconds=frame_save_seconds,
             encode_seconds=encode_seconds,
@@ -339,8 +325,7 @@ def _run_pipe_transport(
     bundle,
     postprocess_config: dict,
     collect_profile: bool,
-    costume_palette_runtime: CostumePaletteRuntime | None,
-) -> tuple[int, float, float, float, float, float, float, float, float, float, float, float, float, float]:
+) -> tuple[int, float, float, float, float, float, float, float, float, float, float, float, float]:
     width = int(media_info["width"])
     height = int(media_info["height"])
     frame_bytes = width * height * 3
@@ -355,7 +340,6 @@ def _run_pipe_transport(
     inference_postprocess_graph_seconds = 0.0
     inference_postprocess_download_seconds = 0.0
     inference_postprocess_cpu_seconds = 0.0
-    costume_palette_seconds = 0.0
     temporal_smoothing_seconds = 0.0
     frame_save_seconds = 0.0
 
@@ -414,13 +398,6 @@ def _run_pipe_transport(
                     postprocess_config=postprocess_config,
                 )
             for source_rgb, result_np in zip(batch_frames, result_batch, strict=True):
-                if costume_palette_runtime is not None:
-                    palette_started = time.perf_counter()
-                    result_np = costume_palette_runtime.apply(
-                        image_rgb=result_np,
-                        source_rgb=source_rgb,
-                    )
-                    costume_palette_seconds += time.perf_counter() - palette_started
                 if bool(postprocess_config.get("temporal_smoothing", False)):
                     temporal_started = time.perf_counter()
                     result_np, previous_smoothed_frame = apply_temporal_smoothing(
@@ -466,7 +443,6 @@ def _run_pipe_transport(
         inference_postprocess_graph_seconds,
         inference_postprocess_download_seconds,
         inference_postprocess_cpu_seconds,
-        costume_palette_seconds,
         temporal_smoothing_seconds,
         frame_save_seconds,
         encode_seconds,

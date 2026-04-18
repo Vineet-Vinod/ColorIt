@@ -2,7 +2,7 @@ model:
   repo_id: spensercai/DeOldify
   filename: ColorizeVideo_gen.pth
   weights_path: models/deoldify/ColorizeVideo_gen.pth
-  render_factor: 21
+  render_factor: 17
 
 runtime:
   backend_preference: mps

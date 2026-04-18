@@ -11,7 +11,6 @@ The repo is centered on one practical path:
 ## Commands
 
 - `uv run colorit download-weights`
-- `uv run colorit verify-env`
 - `uv run colorit colorize-frame`
 - `uv run colorit colorize-clip`
 - `uv run colorit colorize-movie`
@@ -23,13 +22,6 @@ Install dependencies and fetch weights:
 ```bash
 uv sync
 uv run colorit download-weights
-```
-
-Verify the environment:
-
-```bash
-uv run colorit verify-env --skip-inference
-uv run colorit verify-env --test-image path/to/frame.png
 ```
 
 Colorize an entire movie:

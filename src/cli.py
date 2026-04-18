@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from src.pipeline.bootstrap import run_verify_env
 from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import load_config
 from src.pipeline.inference import colorize_image_file
@@ -15,16 +14,6 @@ from src.pipeline.weights import run_download_weights
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="colorit", description="DeOldify movie colorization CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
-
-    verify_parser = subparsers.add_parser(
-        "verify-env",
-        help="Validate local prerequisites and optional single-frame inference.",
-    )
-    verify_parser.add_argument("--config", default="configs/default.yaml")
-    verify_parser.add_argument("--test-image", default=None)
-    verify_parser.add_argument("--test-frame-time-seconds", type=float, default=60.0)
-    verify_parser.add_argument("--skip-inference", action="store_true")
-    verify_parser.set_defaults(handler=handle_verify_env)
 
     download_parser = subparsers.add_parser(
         "download-weights",
@@ -92,17 +81,6 @@ def build_parser() -> argparse.ArgumentParser:
     movie_parser.set_defaults(handler=handle_colorize_movie)
 
     return parser
-
-
-def handle_verify_env(args: argparse.Namespace) -> int:
-    config = load_config(Path(args.config))
-    return run_verify_env(
-        config=config,
-        config_path=Path(args.config),
-        test_image=Path(args.test_image) if args.test_image else None,
-        test_frame_time_seconds=float(args.test_frame_time_seconds),
-        skip_inference=bool(args.skip_inference),
-    )
 
 
 def handle_download_weights(args: argparse.Namespace) -> int:

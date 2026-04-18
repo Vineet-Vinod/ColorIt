@@ -232,6 +232,40 @@ def concat_videos(
     _run(command)
 
 
+def compress_video(
+    *,
+    input_path: Path,
+    output_path: Path,
+    video_codec: str,
+    preset: str,
+    crf: int,
+    audio_codec: str,
+    audio_bitrate: str,
+    faststart: bool,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-c:v",
+        video_codec,
+        "-preset",
+        preset,
+        "-crf",
+        str(crf),
+        "-c:a",
+        audio_codec,
+        "-b:a",
+        audio_bitrate,
+    ]
+    if faststart:
+        command.extend(["-movflags", "+faststart"])
+    command.append(str(output_path))
+    _run(command)
+
+
 def fps_to_decimal_string(value: str) -> str:
     if "/" not in value:
         return value

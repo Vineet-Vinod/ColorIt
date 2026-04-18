@@ -13,6 +13,7 @@ The repo is centered on one practical path:
 - `uv run colorit download-weights`
 - `uv run colorit colorize-frame`
 - `uv run colorit colorize-clip`
+- `uv run colorit compress-video`
 - `uv run colorit colorize-movie`
 
 ## Quick Start
@@ -36,6 +37,16 @@ By default this writes:
 
 - input: `/path/to/movie.mp4`
 - output: `/path/to/movie_color.mp4`
+
+Create a compressed derivative when you need one:
+
+```bash
+uv run colorit compress-video \
+  --input /path/to/movie_color.mp4 \
+  --overwrite
+```
+
+By default this writes `/path/to/movie_color_compressed.mp4`.
 
 To keep temporary scene clips and manifests for inspection:
 

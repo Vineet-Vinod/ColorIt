@@ -5,6 +5,7 @@ from pathlib import Path
 
 from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import load_config
+from src.pipeline.ffmpeg_utils import compress_video
 from src.pipeline.inference import colorize_image_file
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.movie import run_colorize_movie
@@ -80,6 +81,25 @@ def build_parser() -> argparse.ArgumentParser:
     movie_parser.add_argument("--overwrite", action="store_true")
     movie_parser.set_defaults(handler=handle_colorize_movie)
 
+    compress_parser = subparsers.add_parser(
+        "compress-video",
+        help="Create a compressed derivative of an existing video.",
+    )
+    compress_parser.add_argument("--input", required=True)
+    compress_parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional output path. Defaults to the input path with '_compressed' appended to the stem.",
+    )
+    compress_parser.add_argument("--video-codec", default="libx264")
+    compress_parser.add_argument("--preset", default="medium")
+    compress_parser.add_argument("--crf", type=int, default=23)
+    compress_parser.add_argument("--audio-codec", default="aac")
+    compress_parser.add_argument("--audio-bitrate", default="128k")
+    compress_parser.add_argument("--no-faststart", action="store_true")
+    compress_parser.add_argument("--overwrite", action="store_true")
+    compress_parser.set_defaults(handler=handle_compress_video)
+
     return parser
 
 
@@ -118,6 +138,33 @@ def handle_colorize_clip(args: argparse.Namespace) -> int:
         manifest_path=None,
         overwrite=bool(args.overwrite),
     )
+
+
+def handle_compress_video(args: argparse.Namespace) -> int:
+    input_path = Path(args.input).expanduser().resolve()
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input video not found: {input_path}")
+
+    output_path = (
+        Path(args.output).expanduser().resolve()
+        if args.output
+        else input_path.with_name(f"{input_path.stem}_compressed{input_path.suffix}")
+    )
+    if output_path.exists() and not args.overwrite:
+        raise FileExistsError(f"Output already exists: {output_path}. Use --overwrite to replace it.")
+
+    compress_video(
+        input_path=input_path,
+        output_path=output_path,
+        video_codec=str(args.video_codec),
+        preset=str(args.preset),
+        crf=int(args.crf),
+        audio_codec=str(args.audio_codec),
+        audio_bitrate=str(args.audio_bitrate),
+        faststart=not bool(args.no_faststart),
+    )
+    print(f"Compressed video written to {output_path}")
+    return 0
 
 
 def handle_colorize_movie(args: argparse.Namespace) -> int:

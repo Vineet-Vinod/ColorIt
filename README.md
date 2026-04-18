@@ -111,6 +111,65 @@ The repository also includes warmed comparison presets:
 
 These apply warm-bias correction, and `quality_warm_smooth.yaml` also adds lightweight temporal chroma smoothing for flicker reduction.
 
+### Costume Palette Guidance
+
+There is now an optional post-colorization stage for the specific failure mode where costumes stay faded, green/cyan, or washed out even when the rest of the frame is acceptable.
+
+The stage is intentionally narrow:
+
+- it builds a conservative actor/costume mask
+- it extracts a small vivid palette from reference images or explicit colors
+- it remaps only costume chroma while preserving scene luminance and cloth shading
+
+This is configured under `postprocess.costume_palette`:
+
+```yaml
+postprocess:
+  temporal_smoothing: false
+  smoothing_strength: 0.0
+  smoothing_chroma_threshold: 24.0
+  adaptive_smoothing_boost: 0.0
+  warmth: 0.0
+  shadow_warmth: 0.0
+  blue_reduction: 0.0
+  costume_palette:
+    enabled: true
+    mask_backend: maskrcnn_v2_conservative
+    reference_images:
+      - data/references/era_palette_01.png
+      - data/references/era_palette_02.png
+    palette_colors:
+      - "#7a1028"
+      - "#8a1e4b"
+      - "#a56b16"
+    palette_size: 5
+    strength: 0.72
+    neutral_boost: 0.18
+    min_chroma: 26.0
+    warm_bias: 0.10
+```
+
+Use `reference_images` when you have similar-era color films. Use `palette_colors` when you know a costume family should be pushed toward specific hues.
+
+### Costume Hint Recolor
+
+For frame-level costume correction, the repo also includes a localized hint-propagation experiment:
+
+```bash
+uv run python scripts/render_costume_hint_stills.py \
+  --movie ~/Movies/Kannada/'emme thammanna.mp4' \
+  --timestamp 00:58:28 \
+  --config configs/quality.yaml \
+  --output-root data/experiments/costume_hint_stills \
+  --palette-color '#7a1028' \
+  --palette-color '#8a1e4b' \
+  --palette-color '#a56b16' \
+  --device mps \
+  --overwrite
+```
+
+This path keeps the DeOldify base frame, derives a conservative costume mask, places a small number of vivid seed colors inside the costume, and propagates them with edge-aware luminance guidance so the recolor stays localized to the garment.
+
 ## Current Baseline Decision
 
 The current v1 baseline remains `configs/quality.yaml`.

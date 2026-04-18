@@ -23,6 +23,7 @@ from src.pipeline.actor_mask_backends import (
     write_mask,
 )
 from src.pipeline.config import load_config
+from src.pipeline.costume_palette import build_costume_palette_runtime
 from src.pipeline.ffmpeg_utils import extract_single_frame
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.inference import colorize_pil_image
@@ -74,6 +75,10 @@ def main() -> int:
         checkpoint_path=Path(args.refiner_checkpoint),
         device=device,
     )
+    costume_palette_runtime = build_costume_palette_runtime(
+        postprocess_config=config.raw.get("postprocess", {}),
+        device=device,
+    )
     font = ImageFont.load_default()
 
     summary = {
@@ -83,6 +88,7 @@ def main() -> int:
         "device": str(device),
         "refiner_input_channels": refiner_bundle.input_channels,
         "mask_mode": "input+output" if refiner_bundle.input_channels > 4 else "output-only",
+        "costume_palette_enabled": costume_palette_runtime is not None,
         "mask_backends": args.mask_backend,
         "frames": [],
     }
@@ -134,6 +140,31 @@ def main() -> int:
             "refined_unmasked": str(refined_path),
             "masked_variants": [],
         }
+        if costume_palette_runtime is not None:
+            base_palette = Image.fromarray(
+                costume_palette_runtime.apply(
+                    image_rgb=np.asarray(base),
+                    source_rgb=np.asarray(gray),
+                )
+            )
+            refined_palette = Image.fromarray(
+                costume_palette_runtime.apply(
+                    image_rgb=np.asarray(refined),
+                    source_rgb=np.asarray(gray),
+                )
+            )
+            base_palette_path = timestamp_dir / "base_palette.png"
+            refined_palette_path = timestamp_dir / "refined_palette.png"
+            base_palette.save(base_palette_path)
+            refined_palette.save(refined_palette_path)
+            items.extend(
+                [
+                    ("Base+Palette", base_palette),
+                    ("Refined+Palette", refined_palette),
+                ]
+            )
+            frame_record["base_palette"] = str(base_palette_path)
+            frame_record["refined_palette"] = str(refined_palette_path)
 
         for backend_name in args.mask_backend:
             if backend_name not in actor_backends:

@@ -8,8 +8,6 @@ The repo is centered on one practical path:
 - colorize each scene with the optimized DeOldify clip pipeline
 - reassemble a final movie next to the source with `_color` appended to the filename
 
-Everything else that was training, finetuning, benchmarking, or experiment scaffolding is being kept out of the normal workflow.
-
 ## Commands
 
 - `uv run colorit download-weights`

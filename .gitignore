@@ -12,9 +12,8 @@ models/deoldify/*.pth
 data/colorized/
 data/final/
 data/frames/
-data/scenes/*
-data/manifests/*.json
-data/manifests/concat_*.txt
+data/scenes/
+data/manifests/
 
 # Allow directory placeholders
 !data/**/.gitkeep

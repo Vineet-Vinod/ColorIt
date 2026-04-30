@@ -19,6 +19,7 @@ def run_recolor_segments(
     color_hex: str | None,
     palette_manifest_path: Path | None,
     include_labels: list[str],
+    recolor_mode: str,
     chroma_blend: float,
     mask_erode_px: int,
     mask_feather_px: int,
@@ -42,6 +43,8 @@ def run_recolor_segments(
         raise ValueError("Either color_hex or palette_manifest_path must be provided.")
     if color_hex is not None:
         _hex_to_rgb(color_hex)
+    if recolor_mode not in {"lab-chroma", "color-filter"}:
+        raise ValueError(f"Unsupported recolor mode: {recolor_mode}")
 
     manifest = load_segment_manifest(segment_manifest_path)
     palette_by_track = _load_palette_manifest(palette_manifest_path) if palette_manifest_path else {}
@@ -115,10 +118,11 @@ def run_recolor_segments(
                 previous_alpha_by_track[track_id] = alpha
                 seen_track_ids.add(track_id)
 
-                recolored = _apply_lab_chroma(
+                recolored = _apply_recolor(
                     base_rgb=recolored,
                     target_hex=str(instance["target_hex"]),
                     mask_alpha=alpha,
+                    recolor_mode=recolor_mode,
                     chroma_blend=chroma_blend,
                 )
             previous_alpha_by_track = {
@@ -216,6 +220,31 @@ def _load_palette_manifest(path: Path | None) -> dict[str, str]:
     return palette
 
 
+def _apply_recolor(
+    *,
+    base_rgb: np.ndarray,
+    target_hex: str,
+    mask_alpha: np.ndarray,
+    recolor_mode: str,
+    chroma_blend: float,
+) -> np.ndarray:
+    if recolor_mode == "lab-chroma":
+        return _apply_lab_chroma(
+            base_rgb=base_rgb,
+            target_hex=target_hex,
+            mask_alpha=mask_alpha,
+            chroma_blend=chroma_blend,
+        )
+    if recolor_mode == "color-filter":
+        return _apply_color_filter(
+            base_rgb=base_rgb,
+            target_hex=target_hex,
+            mask_alpha=mask_alpha,
+            chroma_blend=chroma_blend,
+        )
+    raise ValueError(f"Unsupported recolor mode: {recolor_mode}")
+
+
 def _apply_lab_chroma(
     *,
     base_rgb: np.ndarray,
@@ -233,6 +262,45 @@ def _apply_lab_chroma(
     base_lab[:, :, 1] = (1.0 - blend) * base_lab[:, :, 1] + blend * target_lab[1]
     base_lab[:, :, 2] = (1.0 - blend) * base_lab[:, :, 2] + blend * target_lab[2]
     return cv2.cvtColor(np.clip(base_lab, 0.0, 255.0).astype(np.uint8), cv2.COLOR_LAB2RGB)
+
+
+def _apply_color_filter(
+    *,
+    base_rgb: np.ndarray,
+    target_hex: str,
+    mask_alpha: np.ndarray,
+    chroma_blend: float,
+) -> np.ndarray:
+    base_lab = cv2.cvtColor(base_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+    luma = base_lab[:, :, 0] / 255.0
+    shadow_gate = _smoothstep(0.10, 0.36, luma)
+    highlight_gate = 1.0 - _smoothstep(0.78, 0.98, luma)
+    luma_gate = np.clip(shadow_gate * highlight_gate, 0.0, 1.0)
+
+    mask_gate = np.power(np.clip(mask_alpha, 0.0, 1.0), 1.35)
+    blend = np.clip(mask_gate * luma_gate * float(np.clip(chroma_blend, 0.0, 1.0)), 0.0, 1.0)
+    if not np.any(blend > 0.0):
+        return base_rgb
+
+    target_rgb = np.array([[_hex_to_rgb(target_hex)]], dtype=np.uint8)
+    target_lab = cv2.cvtColor(target_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)[0, 0]
+    target_chroma = target_lab[1:3] - 128.0
+    target_magnitude = float(np.linalg.norm(target_chroma))
+    if target_magnitude > 56.0:
+        target_chroma *= 56.0 / target_magnitude
+
+    chroma_scale = 0.42 + 0.38 * luma_gate
+    desired_a = 128.0 + target_chroma[0] * chroma_scale
+    desired_b = 128.0 + target_chroma[1] * chroma_scale
+
+    base_lab[:, :, 1] = base_lab[:, :, 1] + (desired_a - base_lab[:, :, 1]) * blend
+    base_lab[:, :, 2] = base_lab[:, :, 2] + (desired_b - base_lab[:, :, 2]) * blend
+    return cv2.cvtColor(np.clip(base_lab, 0.0, 255.0).astype(np.uint8), cv2.COLOR_LAB2RGB)
+
+
+def _smoothstep(edge0: float, edge1: float, value: np.ndarray) -> np.ndarray:
+    value = np.clip((value - edge0) / max(edge1 - edge0, 1e-6), 0.0, 1.0)
+    return value * value * (3.0 - 2.0 * value)
 
 
 def _hex_to_rgb(value: str) -> tuple[int, int, int]:

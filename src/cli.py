@@ -226,6 +226,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Only recolor this label. Defaults to all labels in the manifest.",
     )
+    segment_recolor_parser.add_argument(
+        "--recolor-mode",
+        choices=("lab-chroma", "color-filter"),
+        default="lab-chroma",
+        help="Compositing method for adding target colors.",
+    )
     segment_recolor_parser.add_argument("--chroma-blend", type=float, default=0.70)
     segment_recolor_parser.add_argument("--mask-erode-px", type=int, default=1)
     segment_recolor_parser.add_argument("--mask-feather-px", type=int, default=3)
@@ -399,6 +405,7 @@ def handle_recolor_segments(args: argparse.Namespace) -> int:
         color_hex=str(args.color) if args.color else None,
         palette_manifest_path=Path(args.palette_manifest) if args.palette_manifest else None,
         include_labels=list(args.include_label),
+        recolor_mode=str(args.recolor_mode),
         chroma_blend=float(args.chroma_blend),
         mask_erode_px=int(args.mask_erode_px),
         mask_feather_px=int(args.mask_feather_px),

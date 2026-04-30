@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -18,6 +19,14 @@ from src.pipeline.segments import (
 )
 
 
+@dataclass
+class ActiveGuideTrack:
+    track_id: str
+    centroid: tuple[float, float]
+    last_frame_index: int
+    missed_frames: int = 0
+
+
 def run_filter_segments(
     *,
     segment_manifest_path: Path,
@@ -29,6 +38,9 @@ def run_filter_segments(
     min_area: int,
     guide_min_area: int,
     guide_merge_distance: float,
+    track_split_guides: bool,
+    guide_track_max_distance: float,
+    guide_track_max_missing: int,
     close_px: int,
     erode_px: int,
     dilate_px: int,
@@ -55,6 +67,8 @@ def run_filter_segments(
     frames: list[SegmentFrame] = []
     width = int(source_manifest["width"])
     height = int(source_manifest["height"])
+    next_guide_track_number = 1
+    active_guide_tracks: dict[str, ActiveGuideTrack] = {}
     for frame_payload in source_manifest["frames"]:
         frame_index = int(frame_payload["frame_index"])
         include_mask = np.zeros((height, width), dtype=np.uint8)
@@ -90,17 +104,38 @@ def run_filter_segments(
         )
 
         instances: list[SegmentInstance] = []
-        split_masks = _split_mask_by_guides(
-            mask=output_mask,
+        guide_anchors = _guide_anchors(
             guide_mask=guide_mask,
-            min_area=min_area,
             guide_min_area=guide_min_area,
             guide_merge_distance=guide_merge_distance,
         )
-        for split_index, split_mask in enumerate(split_masks, start=1):
+        if track_split_guides:
+            assigned_guides, next_guide_track_number = _assign_guides_to_tracks(
+                anchors=guide_anchors,
+                active_tracks=active_guide_tracks,
+                frame_index=frame_index,
+                next_track_number=next_guide_track_number,
+                max_distance=guide_track_max_distance,
+                max_missing=guide_track_max_missing,
+            )
+            split_masks = _split_mask_by_anchors(
+                mask=output_mask,
+                guide_anchors=[(track_id, x, y) for track_id, (x, y) in assigned_guides],
+                min_area=min_area,
+            )
+        else:
+            split_masks = _split_mask_by_anchors(
+                mask=output_mask,
+                guide_anchors=[
+                    (f"{index:02d}", x, y)
+                    for index, (x, y) in enumerate(guide_anchors, start=1)
+                ],
+                min_area=min_area,
+            )
+        for split_id, split_mask in split_masks:
             if not np.any(split_mask):
                 continue
-            track_id = f"filtered_{output_label}_{split_index:02d}"
+            track_id = f"filtered_{output_label}_{split_id}"
             output_tracks.setdefault(
                 track_id,
                 SegmentTrack(
@@ -176,44 +211,93 @@ def _clean_mask(
     return output
 
 
-def _split_mask_by_guides(
+def _split_mask_by_anchors(
     *,
     mask: np.ndarray,
-    guide_mask: np.ndarray,
+    guide_anchors: list[tuple[str, float, float]],
     min_area: int,
-    guide_min_area: int,
-    guide_merge_distance: float,
-) -> list[np.ndarray]:
+) -> list[tuple[str, np.ndarray]]:
     if not np.any(mask):
         return []
 
-    anchors = _guide_anchors(
-        guide_mask=guide_mask,
-        guide_min_area=guide_min_area,
-        guide_merge_distance=guide_merge_distance,
-    )
-    if len(anchors) <= 1:
-        return [mask]
+    if len(guide_anchors) <= 1:
+        split_id = guide_anchors[0][0] if guide_anchors else "01"
+        return [(split_id, mask)]
 
     ys, xs = np.nonzero(mask)
     if len(xs) == 0:
         return []
 
-    anchor_array = np.array(anchors, dtype=np.float32)
+    anchor_array = np.array([(x, y) for _, x, y in guide_anchors], dtype=np.float32)
     pixel_x = xs.astype(np.float32)[:, None]
     pixel_y = ys.astype(np.float32)[:, None]
     distances = ((pixel_x - anchor_array[None, :, 0]) ** 2) + ((pixel_y - anchor_array[None, :, 1]) ** 2) * 0.35
     assignments = np.argmin(distances, axis=1)
 
-    output: list[np.ndarray] = []
-    for anchor_index in range(len(anchors)):
+    output: list[tuple[str, np.ndarray]] = []
+    for anchor_index, (split_id, _, _) in enumerate(guide_anchors):
         split_mask = np.zeros(mask.shape, dtype=np.uint8)
         selected = assignments == anchor_index
         split_mask[ys[selected], xs[selected]] = 255
         split_mask = _remove_small_components(split_mask, min_area=min_area)
         if np.count_nonzero(split_mask) >= min_area:
-            output.append(split_mask)
-    return output or [mask]
+            output.append((split_id, split_mask))
+    return output or [(guide_anchors[0][0], mask)]
+
+
+def _assign_guides_to_tracks(
+    *,
+    anchors: list[tuple[float, float]],
+    active_tracks: dict[str, ActiveGuideTrack],
+    frame_index: int,
+    next_track_number: int,
+    max_distance: float,
+    max_missing: int,
+) -> tuple[list[tuple[str, tuple[float, float]]], int]:
+    candidates: list[tuple[float, int, str]] = []
+    for anchor_index, anchor in enumerate(anchors):
+        for track_id, track in active_tracks.items():
+            if frame_index - track.last_frame_index > max_missing + 1:
+                continue
+            distance = float(np.hypot(anchor[0] - track.centroid[0], anchor[1] - track.centroid[1]))
+            if distance <= max_distance:
+                candidates.append((-distance, anchor_index, track_id))
+
+    assignments: dict[int, str] = {}
+    used_track_ids: set[str] = set()
+    for _, anchor_index, track_id in sorted(candidates, reverse=True):
+        if anchor_index in assignments or track_id in used_track_ids:
+            continue
+        assignments[anchor_index] = track_id
+        used_track_ids.add(track_id)
+
+    assigned_track_ids: set[str] = set()
+    output: list[tuple[str, tuple[float, float]]] = []
+    for anchor_index, anchor in enumerate(anchors):
+        track_id = assignments.get(anchor_index)
+        if track_id is None:
+            track_id = f"guide_{next_track_number:03d}"
+            next_track_number += 1
+        active_tracks[track_id] = ActiveGuideTrack(
+            track_id=track_id,
+            centroid=anchor,
+            last_frame_index=frame_index,
+            missed_frames=0,
+        )
+        assigned_track_ids.add(track_id)
+        output.append((track_id, anchor))
+
+    stale_track_ids: list[str] = []
+    for track_id, track in active_tracks.items():
+        if track_id in assigned_track_ids:
+            continue
+        track.missed_frames += 1
+        if track.missed_frames > max_missing:
+            stale_track_ids.append(track_id)
+    for track_id in stale_track_ids:
+        active_tracks.pop(track_id, None)
+
+    return output, next_track_number
 
 
 def _guide_anchors(

@@ -201,6 +201,13 @@ def build_parser() -> argparse.ArgumentParser:
     segment_filter_parser.add_argument("--min-area", type=int, default=500)
     segment_filter_parser.add_argument("--guide-min-area", type=int, default=120)
     segment_filter_parser.add_argument("--guide-merge-distance", type=float, default=95.0)
+    segment_filter_parser.add_argument(
+        "--track-split-guides",
+        action="store_true",
+        help="Track split guide anchors over time and use those stable ids in output track ids.",
+    )
+    segment_filter_parser.add_argument("--guide-track-max-distance", type=float, default=140.0)
+    segment_filter_parser.add_argument("--guide-track-max-missing", type=int, default=6)
     segment_filter_parser.add_argument("--close-px", type=int, default=0)
     segment_filter_parser.add_argument("--erode-px", type=int, default=0)
     segment_filter_parser.add_argument("--dilate-px", type=int, default=0)
@@ -445,6 +452,9 @@ def handle_filter_segments(args: argparse.Namespace) -> int:
         min_area=int(args.min_area),
         guide_min_area=int(args.guide_min_area),
         guide_merge_distance=float(args.guide_merge_distance),
+        track_split_guides=bool(args.track_split_guides),
+        guide_track_max_distance=float(args.guide_track_max_distance),
+        guide_track_max_missing=int(args.guide_track_max_missing),
         close_px=int(args.close_px),
         erode_px=int(args.erode_px),
         dilate_px=int(args.dilate_px),

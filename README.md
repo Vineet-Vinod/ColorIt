@@ -99,6 +99,27 @@ The first backend is `polygon`, a model-free debug backend that interpolates
 track keyframes. It is useful for validating downstream consumers before adding
 model-backed human parsing or video segmentation.
 
+The optional `human-parser` backend uses a sandbox-vetted SegFormer clothing
+parser and emits semantic human-part masks such as `upper_clothes`, `dress`,
+`scarf`, `face`, `hair`, `left_arm`, and `right_arm`.
+
+Install the optional dependencies:
+
+```bash
+uv sync --extra segmentation
+```
+
+Run human parsing:
+
+```bash
+uv run colorit segment-clip \
+  --input data/eval/clips/close_up.mp4 \
+  --backend human-parser \
+  --device cpu \
+  --output-dir data/segments/close_up_human_parser \
+  --overwrite
+```
+
 Segment manifests are written as:
 
 ```text
@@ -124,3 +145,16 @@ uv run colorit render-segment-debug \
 
 Use `--include-label`, `--include-track`, and `--exclude-label` to focus review
 on specific segment classes or tracks.
+
+For costume-mask review, start with clothing labels only:
+
+```bash
+uv run colorit render-segment-debug \
+  --input data/eval/clips/close_up.mp4 \
+  --segment-manifest data/segments/close_up_human_parser/segment_manifest.json \
+  --output data/segments/close_up_human_parser/clothes_overlay.mp4 \
+  --include-label upper_clothes \
+  --include-label dress \
+  --include-label scarf \
+  --overwrite
+```

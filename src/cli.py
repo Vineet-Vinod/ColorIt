@@ -9,6 +9,10 @@ from src.pipeline.ffmpeg_utils import compress_video
 from src.pipeline.inference import colorize_image_file
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.movie import run_colorize_movie
+from src.pipeline.segment_clip import run_segment_clip
+from src.pipeline.segment_debug import run_render_segment_debug
+from src.pipeline.segment_filter import run_filter_segments
+from src.pipeline.segment_recolor import run_recolor_segments
 from src.pipeline.weights import run_download_weights
 
 
@@ -100,6 +104,125 @@ def build_parser() -> argparse.ArgumentParser:
     compress_parser.add_argument("--overwrite", action="store_true")
     compress_parser.set_defaults(handler=handle_compress_video)
 
+    segment_parser = subparsers.add_parser(
+        "segment-clip",
+        help="Generate a reusable segment manifest and masks for a clip.",
+    )
+    segment_parser.add_argument("--input", required=True, help="Input clip path.")
+    segment_parser.add_argument(
+        "--backend",
+        default="polygon",
+        choices=("polygon", "human-parser"),
+        help="Segmentation backend to run.",
+    )
+    segment_parser.add_argument("--output-dir", required=True, help="Segment artifact directory.")
+    segment_parser.add_argument(
+        "--tracks",
+        default=None,
+        help="Backend-specific polygon track JSON file.",
+    )
+    segment_parser.add_argument(
+        "--model-id",
+        default=None,
+        help="Backend-specific model id. Defaults to the vetted human parser model.",
+    )
+    segment_parser.add_argument(
+        "--device",
+        default="auto",
+        choices=("auto", "cpu", "mps"),
+        help="Model device for model-backed segmentation backends.",
+    )
+    segment_parser.add_argument("--overwrite", action="store_true")
+    segment_parser.set_defaults(handler=handle_segment_clip)
+
+    segment_debug_parser = subparsers.add_parser(
+        "render-segment-debug",
+        help="Render a video overlay for a segment manifest.",
+    )
+    segment_debug_parser.add_argument("--input", required=True, help="Input clip path.")
+    segment_debug_parser.add_argument(
+        "--segment-manifest",
+        required=True,
+        help="Segment manifest JSON path.",
+    )
+    segment_debug_parser.add_argument("--output", required=True, help="Output overlay video path.")
+    segment_debug_parser.add_argument(
+        "--include-label",
+        action="append",
+        default=[],
+        help="Only render this label. Can be passed multiple times.",
+    )
+    segment_debug_parser.add_argument(
+        "--include-track",
+        action="append",
+        default=[],
+        help="Only render this track id. Can be passed multiple times.",
+    )
+    segment_debug_parser.add_argument(
+        "--exclude-label",
+        action="append",
+        default=[],
+        help="Skip this label. Can be passed multiple times.",
+    )
+    segment_debug_parser.add_argument("--alpha", type=float, default=0.45)
+    segment_debug_parser.add_argument("--overwrite", action="store_true")
+    segment_debug_parser.set_defaults(handler=handle_render_segment_debug)
+
+    segment_filter_parser = subparsers.add_parser(
+        "filter-segments",
+        help="Build a cleaned segment manifest from include and veto labels.",
+    )
+    segment_filter_parser.add_argument(
+        "--segment-manifest",
+        required=True,
+        help="Source segment manifest JSON path.",
+    )
+    segment_filter_parser.add_argument("--output-dir", required=True, help="Filtered segment directory.")
+    segment_filter_parser.add_argument(
+        "--include-label",
+        action="append",
+        default=[],
+        help="Include this source label. Can be passed multiple times.",
+    )
+    segment_filter_parser.add_argument(
+        "--veto-label",
+        action="append",
+        default=[],
+        help="Subtract this source label. Can be passed multiple times.",
+    )
+    segment_filter_parser.add_argument("--output-label", default="costume_candidate")
+    segment_filter_parser.add_argument("--min-area", type=int, default=500)
+    segment_filter_parser.add_argument("--close-px", type=int, default=0)
+    segment_filter_parser.add_argument("--erode-px", type=int, default=0)
+    segment_filter_parser.add_argument("--dilate-px", type=int, default=0)
+    segment_filter_parser.add_argument("--overwrite", action="store_true")
+    segment_filter_parser.set_defaults(handler=handle_filter_segments)
+
+    segment_recolor_parser = subparsers.add_parser(
+        "recolor-segments",
+        help="Apply a fixed chroma color inside segment masks of an existing colorized clip.",
+    )
+    segment_recolor_parser.add_argument("--input", required=True, help="Input colorized clip path.")
+    segment_recolor_parser.add_argument(
+        "--segment-manifest",
+        required=True,
+        help="Segment manifest JSON path aligned to the input clip.",
+    )
+    segment_recolor_parser.add_argument("--output", required=True, help="Output recolored clip path.")
+    segment_recolor_parser.add_argument("--color", required=True, help="Target #RRGGBB color.")
+    segment_recolor_parser.add_argument(
+        "--include-label",
+        action="append",
+        default=[],
+        help="Only recolor this label. Defaults to all labels in the manifest.",
+    )
+    segment_recolor_parser.add_argument("--chroma-blend", type=float, default=0.70)
+    segment_recolor_parser.add_argument("--mask-erode-px", type=int, default=1)
+    segment_recolor_parser.add_argument("--mask-feather-px", type=int, default=3)
+    segment_recolor_parser.add_argument("--temporal-mask-blend", type=float, default=0.20)
+    segment_recolor_parser.add_argument("--overwrite", action="store_true")
+    segment_recolor_parser.set_defaults(handler=handle_recolor_segments)
+
     return parser
 
 
@@ -178,6 +301,61 @@ def handle_colorize_movie(args: argparse.Namespace) -> int:
         keep_intermediates=bool(args.keep_intermediates),
         resume=bool(args.resume),
         limit=args.limit,
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_segment_clip(args: argparse.Namespace) -> int:
+    return run_segment_clip(
+        input_path=Path(args.input),
+        backend=str(args.backend),
+        output_dir=Path(args.output_dir),
+        tracks_path=Path(args.tracks) if args.tracks else None,
+        model_id=args.model_id,
+        device=str(args.device),
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_render_segment_debug(args: argparse.Namespace) -> int:
+    return run_render_segment_debug(
+        input_path=Path(args.input),
+        segment_manifest_path=Path(args.segment_manifest),
+        output_path=Path(args.output),
+        include_labels=list(args.include_label),
+        include_tracks=list(args.include_track),
+        exclude_labels=list(args.exclude_label),
+        alpha=float(args.alpha),
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_filter_segments(args: argparse.Namespace) -> int:
+    return run_filter_segments(
+        segment_manifest_path=Path(args.segment_manifest),
+        output_dir=Path(args.output_dir),
+        include_labels=list(args.include_label),
+        veto_labels=list(args.veto_label),
+        output_label=str(args.output_label),
+        min_area=int(args.min_area),
+        close_px=int(args.close_px),
+        erode_px=int(args.erode_px),
+        dilate_px=int(args.dilate_px),
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_recolor_segments(args: argparse.Namespace) -> int:
+    return run_recolor_segments(
+        input_path=Path(args.input),
+        segment_manifest_path=Path(args.segment_manifest),
+        output_path=Path(args.output),
+        color_hex=str(args.color),
+        include_labels=list(args.include_label),
+        chroma_blend=float(args.chroma_blend),
+        mask_erode_px=int(args.mask_erode_px),
+        mask_feather_px=int(args.mask_feather_px),
+        temporal_mask_blend=float(args.temporal_mask_blend),
         overwrite=bool(args.overwrite),
     )
 

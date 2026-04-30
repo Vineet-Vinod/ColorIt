@@ -14,6 +14,8 @@ data/final/
 data/frames/
 data/scenes/
 data/manifests/
+data/eval/
+data/segments/
 
 # Allow directory placeholders
 !data/**/.gitkeep

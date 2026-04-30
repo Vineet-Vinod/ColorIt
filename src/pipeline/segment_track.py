@@ -48,6 +48,7 @@ def run_track_segments(
     max_center_distance: float,
     max_missing_frames: int,
     split_wide_components: bool,
+    preserve_source_instances: bool,
     max_component_width_ratio: float,
     min_split_valley_ratio: float,
     overwrite: bool,
@@ -74,15 +75,16 @@ def run_track_segments(
 
     for frame_payload in source_manifest["frames"]:
         frame_index = int(frame_payload["frame_index"])
-        frame_mask = _combined_frame_mask(
+        frame_masks = _frame_masks(
             frame_payload=frame_payload,
             segment_manifest_path=segment_manifest_path,
             include_labels=include_label_set,
             width=width,
             height=height,
+            preserve_source_instances=preserve_source_instances,
         )
-        components = _components_from_mask(
-            frame_mask,
+        components = _components_from_masks(
+            frame_masks,
             min_area=min_area,
             split_wide_components=split_wide_components,
             max_component_width=int(round(width * max_component_width_ratio)),
@@ -160,15 +162,17 @@ def run_track_segments(
     return 0
 
 
-def _combined_frame_mask(
+def _frame_masks(
     *,
     frame_payload: dict,
     segment_manifest_path: Path,
     include_labels: set[str],
     width: int,
     height: int,
-) -> np.ndarray:
-    output = np.zeros((height, width), dtype=np.uint8)
+    preserve_source_instances: bool,
+) -> list[np.ndarray]:
+    masks: list[np.ndarray] = []
+    combined = np.zeros((height, width), dtype=np.uint8)
     for instance in frame_payload.get("instances", []):
         if str(instance.get("label", "")) not in include_labels:
             continue
@@ -179,50 +183,55 @@ def _combined_frame_mask(
         mask = np.asarray(Image.open(mask_path).convert("L"))
         if mask.shape[:2] != (height, width):
             mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
-        output = cv2.bitwise_or(output, np.where(mask > 0, 255, 0).astype(np.uint8))
-    return output
+        mask = np.where(mask > 0, 255, 0).astype(np.uint8)
+        if preserve_source_instances:
+            masks.append(mask)
+        else:
+            combined = cv2.bitwise_or(combined, mask)
+    return masks if preserve_source_instances else [combined]
 
 
-def _components_from_mask(
-    mask: np.ndarray,
+def _components_from_masks(
+    masks: list[np.ndarray],
     *,
     min_area: int,
     split_wide_components: bool,
     max_component_width: int,
     min_split_valley_ratio: float,
 ) -> list[Component]:
-    component_count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
     components: list[Component] = []
-    for component_index in range(1, component_count):
-        area = int(stats[component_index, cv2.CC_STAT_AREA])
-        if area < min_area:
-            continue
-        component_mask = np.zeros(mask.shape, dtype=np.uint8)
-        component_mask[labels == component_index] = 255
-        split_masks = [component_mask]
-        if split_wide_components:
-            split_masks = _split_wide_component(
-                component_mask,
-                min_area=min_area,
-                max_component_width=max_component_width,
-                min_split_valley_ratio=min_split_valley_ratio,
-            )
-        for split_mask in split_masks:
-            split_area = int(np.count_nonzero(split_mask))
-            if split_area < min_area:
+    for mask in masks:
+        component_count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        for component_index in range(1, component_count):
+            area = int(stats[component_index, cv2.CC_STAT_AREA])
+            if area < min_area:
                 continue
-            bbox = mask_bbox(split_mask)
-            moments = cv2.moments(split_mask, binaryImage=True)
-            if moments["m00"] == 0:
-                continue
-            components.append(
-                Component(
-                    mask=split_mask,
-                    bbox=bbox,
-                    centroid=(float(moments["m10"] / moments["m00"]), float(moments["m01"] / moments["m00"])),
-                    area=split_area,
+            component_mask = np.zeros(mask.shape, dtype=np.uint8)
+            component_mask[labels == component_index] = 255
+            split_masks = [component_mask]
+            if split_wide_components:
+                split_masks = _split_wide_component(
+                    component_mask,
+                    min_area=min_area,
+                    max_component_width=max_component_width,
+                    min_split_valley_ratio=min_split_valley_ratio,
                 )
-            )
+            for split_mask in split_masks:
+                split_area = int(np.count_nonzero(split_mask))
+                if split_area < min_area:
+                    continue
+                bbox = mask_bbox(split_mask)
+                moments = cv2.moments(split_mask, binaryImage=True)
+                if moments["m00"] == 0:
+                    continue
+                components.append(
+                    Component(
+                        mask=split_mask,
+                        bbox=bbox,
+                        centroid=(float(moments["m10"] / moments["m00"]), float(moments["m01"] / moments["m00"])),
+                        area=split_area,
+                    )
+                )
     components.sort(key=lambda component: component.bbox[0])
     return components
 

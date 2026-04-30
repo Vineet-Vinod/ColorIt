@@ -191,11 +191,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Subtract this source label. Can be passed multiple times.",
     )
+    segment_filter_parser.add_argument(
+        "--split-guide-label",
+        action="append",
+        default=[],
+        help="Use connected components from this label as actor anchors for splitting the output mask.",
+    )
     segment_filter_parser.add_argument("--output-label", default="costume_candidate")
     segment_filter_parser.add_argument("--min-area", type=int, default=500)
+    segment_filter_parser.add_argument("--guide-min-area", type=int, default=120)
+    segment_filter_parser.add_argument("--guide-merge-distance", type=float, default=95.0)
     segment_filter_parser.add_argument("--close-px", type=int, default=0)
     segment_filter_parser.add_argument("--erode-px", type=int, default=0)
     segment_filter_parser.add_argument("--dilate-px", type=int, default=0)
+    segment_filter_parser.add_argument("--veto-dilate-px", type=int, default=0)
     segment_filter_parser.add_argument("--overwrite", action="store_true")
     segment_filter_parser.set_defaults(handler=handle_filter_segments)
 
@@ -264,6 +273,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--split-wide-components",
         action="store_true",
         help="Split oversized connected components at vertical mask-density valleys before tracking.",
+    )
+    segment_track_parser.add_argument(
+        "--preserve-source-instances",
+        action="store_true",
+        help="Track source instances separately instead of merging all included labels before component analysis.",
     )
     segment_track_parser.add_argument(
         "--max-component-width-ratio",
@@ -388,11 +402,15 @@ def handle_filter_segments(args: argparse.Namespace) -> int:
         output_dir=Path(args.output_dir),
         include_labels=list(args.include_label),
         veto_labels=list(args.veto_label),
+        split_guide_labels=list(args.split_guide_label),
         output_label=str(args.output_label),
         min_area=int(args.min_area),
+        guide_min_area=int(args.guide_min_area),
+        guide_merge_distance=float(args.guide_merge_distance),
         close_px=int(args.close_px),
         erode_px=int(args.erode_px),
         dilate_px=int(args.dilate_px),
+        veto_dilate_px=int(args.veto_dilate_px),
         overwrite=bool(args.overwrite),
     )
 
@@ -425,6 +443,7 @@ def handle_track_segments(args: argparse.Namespace) -> int:
         max_center_distance=float(args.max_center_distance),
         max_missing_frames=int(args.max_missing_frames),
         split_wide_components=bool(args.split_wide_components),
+        preserve_source_instances=bool(args.preserve_source_instances),
         max_component_width_ratio=float(args.max_component_width_ratio),
         min_split_valley_ratio=float(args.min_split_valley_ratio),
         overwrite=bool(args.overwrite),

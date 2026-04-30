@@ -230,6 +230,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional JSON palette with {'tracks': {'track_id': '#RRGGBB'}}.",
     )
     segment_recolor_parser.add_argument(
+        "--protect-segment-manifest",
+        default=None,
+        help="Optional segment manifest containing labels to subtract from recolor masks.",
+    )
+    segment_recolor_parser.add_argument(
+        "--protect-label",
+        action="append",
+        default=[],
+        help="Label from --protect-segment-manifest to avoid. Can be passed multiple times.",
+    )
+    segment_recolor_parser.add_argument("--protect-dilate-px", type=int, default=0)
+    segment_recolor_parser.add_argument("--protect-feather-px", type=int, default=0)
+    segment_recolor_parser.add_argument(
         "--include-label",
         action="append",
         default=[],
@@ -422,6 +435,12 @@ def handle_recolor_segments(args: argparse.Namespace) -> int:
         output_path=Path(args.output),
         color_hex=str(args.color) if args.color else None,
         palette_manifest_path=Path(args.palette_manifest) if args.palette_manifest else None,
+        protect_segment_manifest_path=(
+            Path(args.protect_segment_manifest) if args.protect_segment_manifest else None
+        ),
+        protect_labels=list(args.protect_label),
+        protect_dilate_px=int(args.protect_dilate_px),
+        protect_feather_px=int(args.protect_feather_px),
         include_labels=list(args.include_label),
         recolor_mode=str(args.recolor_mode),
         chroma_blend=float(args.chroma_blend),

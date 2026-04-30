@@ -18,6 +18,10 @@ def run_recolor_segments(
     output_path: Path,
     color_hex: str | None,
     palette_manifest_path: Path | None,
+    protect_segment_manifest_path: Path | None,
+    protect_labels: list[str],
+    protect_dilate_px: int,
+    protect_feather_px: int,
     include_labels: list[str],
     recolor_mode: str,
     chroma_blend: float,
@@ -37,6 +41,10 @@ def run_recolor_segments(
         palette_manifest_path = palette_manifest_path.expanduser().resolve()
         if not palette_manifest_path.exists():
             raise FileNotFoundError(f"Palette manifest not found: {palette_manifest_path}")
+    if protect_segment_manifest_path is not None:
+        protect_segment_manifest_path = protect_segment_manifest_path.expanduser().resolve()
+        if not protect_segment_manifest_path.exists():
+            raise FileNotFoundError(f"Protect segment manifest not found: {protect_segment_manifest_path}")
     if output_path.exists() and not overwrite:
         raise FileExistsError(f"Output already exists: {output_path}. Use --overwrite to replace it.")
     if color_hex is None and palette_manifest_path is None:
@@ -47,6 +55,7 @@ def run_recolor_segments(
         raise ValueError(f"Unsupported recolor mode: {recolor_mode}")
 
     manifest = load_segment_manifest(segment_manifest_path)
+    protect_manifest = load_segment_manifest(protect_segment_manifest_path) if protect_segment_manifest_path else None
     palette_by_track = _load_palette_manifest(palette_manifest_path) if palette_manifest_path else {}
     media_info = ffprobe_media(input_path)
     width = int(media_info["width"])
@@ -56,14 +65,30 @@ def run_recolor_segments(
             f"Input clip dimensions {width}x{height} do not match manifest "
             f"{manifest['width']}x{manifest['height']}."
         )
+    if protect_manifest is not None and (
+        width != int(protect_manifest["width"]) or height != int(protect_manifest["height"])
+    ):
+        raise ValueError(
+            f"Input clip dimensions {width}x{height} do not match protect manifest "
+            f"{protect_manifest['width']}x{protect_manifest['height']}."
+        )
 
     frames_by_index = {
         int(frame["frame_index"]): frame
         for frame in manifest["frames"]
     }
+    protect_frames_by_index = (
+        {
+            int(frame["frame_index"]): frame
+            for frame in protect_manifest["frames"]
+        }
+        if protect_manifest is not None
+        else {}
+    )
     include_label_set = set(include_labels)
     if not include_label_set:
         include_label_set = {str(track["label"]) for track in manifest["tracks"].values()}
+    protect_label_set = set(protect_labels)
 
     frame_bytes = width * height * 3
     reader = open_rawvideo_reader(input_path=input_path)
@@ -96,6 +121,16 @@ def run_recolor_segments(
             frame_rgb = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
             recolored = frame_rgb
             seen_track_ids: set[str] = set()
+            protect_alpha = _frame_alpha(
+                frame_payload=protect_frames_by_index.get(frame_index, {"instances": []}),
+                segment_manifest_path=protect_segment_manifest_path,
+                include_labels=protect_label_set,
+                width=width,
+                height=height,
+                erode_px=0,
+                dilate_px=protect_dilate_px,
+                feather_px=protect_feather_px,
+            )
             for instance in _recolor_instances(
                 frame_payload=frames_by_index.get(frame_index, {"instances": []}),
                 include_labels=include_label_set,
@@ -115,6 +150,8 @@ def run_recolor_segments(
                 if previous_alpha is not None and temporal_mask_blend > 0.0:
                     blend = float(np.clip(temporal_mask_blend, 0.0, 0.95))
                     alpha = (1.0 - blend) * alpha + blend * previous_alpha
+                if protect_alpha is not None:
+                    alpha = alpha * (1.0 - protect_alpha)
                 previous_alpha_by_track[track_id] = alpha
                 seen_track_ids.add(track_id)
 
@@ -172,6 +209,43 @@ def _recolor_instances(
         output["target_hex"] = target_hex
         instances.append(output)
     return instances
+
+
+def _frame_alpha(
+    *,
+    frame_payload: dict,
+    segment_manifest_path: Path | None,
+    include_labels: set[str],
+    width: int,
+    height: int,
+    erode_px: int,
+    dilate_px: int,
+    feather_px: int,
+) -> np.ndarray | None:
+    if segment_manifest_path is None or not include_labels:
+        return None
+    mask = np.zeros((height, width), dtype=np.uint8)
+    for instance in frame_payload.get("instances", []):
+        if str(instance.get("label", "")) not in include_labels:
+            continue
+        mask_path = resolve_manifest_path(
+            manifest_path=segment_manifest_path,
+            relative_path=str(instance["mask_path"]),
+        )
+        instance_mask = np.asarray(Image.open(mask_path).convert("L"))
+        if instance_mask.shape[:2] != (height, width):
+            instance_mask = cv2.resize(instance_mask, (width, height), interpolation=cv2.INTER_NEAREST)
+        mask = cv2.bitwise_or(mask, np.where(instance_mask > 0, 255, 0).astype(np.uint8))
+
+    alpha = mask.astype(np.float32) / 255.0
+    if erode_px > 0:
+        alpha = cv2.erode(alpha, _kernel(erode_px), iterations=1)
+    if dilate_px > 0:
+        alpha = cv2.dilate(alpha, _kernel(dilate_px), iterations=1)
+    if feather_px > 0:
+        kernel_size = feather_px * 2 + 1
+        alpha = cv2.GaussianBlur(alpha, (kernel_size, kernel_size), 0)
+    return np.clip(alpha, 0.0, 1.0)
 
 
 def _instance_alpha(

@@ -267,11 +267,15 @@ def _skin_tone_alpha(
     feather_px: int,
 ) -> np.ndarray:
     ycrcb = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2YCrCb)
+    hsv = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2HSV)
     y = ycrcb[:, :, 0]
     cr = ycrcb[:, :, 1]
     cb = ycrcb[:, :, 2]
+    saturation = hsv[:, :, 1]
     mask = (
         (y > 35)
+        & (saturation >= 12)
+        & (saturation <= 105)
         & (cr >= 132)
         & (cr <= 178)
         & (cb >= 78)

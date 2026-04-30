@@ -158,3 +158,26 @@ uv run colorit render-segment-debug \
   --include-label scarf \
   --overwrite
 ```
+
+Build a cleaned costume-candidate manifest from raw human-parser labels:
+
+```bash
+uv run colorit filter-segments \
+  --segment-manifest data/segments/close_up_human_parser/segment_manifest.json \
+  --output-dir data/segments/close_up_costume_candidates \
+  --include-label upper_clothes \
+  --include-label dress \
+  --include-label scarf \
+  --veto-label face \
+  --veto-label hair \
+  --veto-label left_arm \
+  --veto-label right_arm \
+  --min-area 500 \
+  --close-px 3 \
+  --erode-px 1 \
+  --overwrite
+```
+
+The filtered manifest keeps the same segment-manifest contract and emits a
+single `costume_candidate` track, so downstream color experiments can consume a
+stable label instead of raw model-specific parser labels.

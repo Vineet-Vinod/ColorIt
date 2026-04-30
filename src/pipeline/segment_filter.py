@@ -272,7 +272,6 @@ def _assign_guides_to_tracks(
         used_track_ids.add(track_id)
 
     assigned_track_ids: set[str] = set()
-    output: list[tuple[str, tuple[float, float]]] = []
     for anchor_index, anchor in enumerate(anchors):
         track_id = assignments.get(anchor_index)
         if track_id is None:
@@ -285,7 +284,6 @@ def _assign_guides_to_tracks(
             missed_frames=0,
         )
         assigned_track_ids.add(track_id)
-        output.append((track_id, anchor))
 
     stale_track_ids: list[str] = []
     for track_id, track in active_tracks.items():
@@ -297,6 +295,10 @@ def _assign_guides_to_tracks(
     for track_id in stale_track_ids:
         active_tracks.pop(track_id, None)
 
+    output = [
+        (track_id, track.centroid)
+        for track_id, track in sorted(active_tracks.items(), key=lambda item: item[1].centroid[0])
+    ]
     return output, next_track_number
 
 

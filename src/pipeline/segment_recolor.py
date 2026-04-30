@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import cv2
@@ -15,7 +16,8 @@ def run_recolor_segments(
     input_path: Path,
     segment_manifest_path: Path,
     output_path: Path,
-    color_hex: str,
+    color_hex: str | None,
+    palette_manifest_path: Path | None,
     include_labels: list[str],
     chroma_blend: float,
     mask_erode_px: int,
@@ -30,10 +32,19 @@ def run_recolor_segments(
         raise FileNotFoundError(f"Input clip not found: {input_path}")
     if not segment_manifest_path.exists():
         raise FileNotFoundError(f"Segment manifest not found: {segment_manifest_path}")
+    if palette_manifest_path is not None:
+        palette_manifest_path = palette_manifest_path.expanduser().resolve()
+        if not palette_manifest_path.exists():
+            raise FileNotFoundError(f"Palette manifest not found: {palette_manifest_path}")
     if output_path.exists() and not overwrite:
         raise FileExistsError(f"Output already exists: {output_path}. Use --overwrite to replace it.")
+    if color_hex is None and palette_manifest_path is None:
+        raise ValueError("Either color_hex or palette_manifest_path must be provided.")
+    if color_hex is not None:
+        _hex_to_rgb(color_hex)
 
     manifest = load_segment_manifest(segment_manifest_path)
+    palette_by_track = _load_palette_manifest(palette_manifest_path) if palette_manifest_path else {}
     media_info = ffprobe_media(input_path)
     width = int(media_info["width"])
     height = int(media_info["height"])
@@ -68,7 +79,7 @@ def run_recolor_segments(
     if writer.stdin is None or writer.stderr is None:
         raise RuntimeError("ffmpeg rawvideo writer failed to expose stdin/stderr pipes.")
 
-    previous_alpha: np.ndarray | None = None
+    previous_alpha_by_track: dict[str, np.ndarray] = {}
     frame_index = 0
     try:
         while True:
@@ -80,26 +91,41 @@ def run_recolor_segments(
                     f"Unexpected end of rawvideo stream; expected {frame_bytes} bytes, got {len(frame_data)}."
                 )
             frame_rgb = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
-            alpha = _frame_alpha(
+            recolored = frame_rgb
+            seen_track_ids: set[str] = set()
+            for instance in _recolor_instances(
                 frame_payload=frames_by_index.get(frame_index, {"instances": []}),
-                segment_manifest_path=segment_manifest_path,
                 include_labels=include_label_set,
-                width=width,
-                height=height,
-                erode_px=mask_erode_px,
-                feather_px=mask_feather_px,
-            )
-            if previous_alpha is not None and temporal_mask_blend > 0.0:
-                blend = float(np.clip(temporal_mask_blend, 0.0, 0.95))
-                alpha = (1.0 - blend) * alpha + blend * previous_alpha
-            previous_alpha = alpha
+                palette_by_track=palette_by_track,
+                fallback_color_hex=color_hex,
+            ):
+                track_id = str(instance["track_id"])
+                alpha = _instance_alpha(
+                    instance=instance,
+                    segment_manifest_path=segment_manifest_path,
+                    width=width,
+                    height=height,
+                    erode_px=mask_erode_px,
+                    feather_px=mask_feather_px,
+                )
+                previous_alpha = previous_alpha_by_track.get(track_id)
+                if previous_alpha is not None and temporal_mask_blend > 0.0:
+                    blend = float(np.clip(temporal_mask_blend, 0.0, 0.95))
+                    alpha = (1.0 - blend) * alpha + blend * previous_alpha
+                previous_alpha_by_track[track_id] = alpha
+                seen_track_ids.add(track_id)
 
-            recolored = _apply_lab_chroma(
-                base_rgb=frame_rgb,
-                target_hex=color_hex,
-                mask_alpha=alpha,
-                chroma_blend=chroma_blend,
-            )
+                recolored = _apply_lab_chroma(
+                    base_rgb=recolored,
+                    target_hex=str(instance["target_hex"]),
+                    mask_alpha=alpha,
+                    chroma_blend=chroma_blend,
+                )
+            previous_alpha_by_track = {
+                track_id: alpha
+                for track_id, alpha in previous_alpha_by_track.items()
+                if track_id in seen_track_ids
+            }
             writer.stdin.write(np.ascontiguousarray(recolored).tobytes())
             frame_index += 1
 
@@ -123,28 +149,44 @@ def run_recolor_segments(
     return 0
 
 
-def _frame_alpha(
+def _recolor_instances(
     *,
     frame_payload: dict,
-    segment_manifest_path: Path,
     include_labels: set[str],
+    palette_by_track: dict[str, str],
+    fallback_color_hex: str | None,
+) -> list[dict]:
+    instances: list[dict] = []
+    for instance in frame_payload.get("instances", []):
+        if str(instance.get("label", "")) not in include_labels:
+            continue
+        track_id = str(instance.get("track_id", ""))
+        target_hex = palette_by_track.get(track_id, fallback_color_hex)
+        if target_hex is None:
+            continue
+        output = dict(instance)
+        output["target_hex"] = target_hex
+        instances.append(output)
+    return instances
+
+
+def _instance_alpha(
+    *,
+    instance: dict,
+    segment_manifest_path: Path,
     width: int,
     height: int,
     erode_px: int,
     feather_px: int,
 ) -> np.ndarray:
-    mask = np.zeros((height, width), dtype=np.uint8)
-    for instance in frame_payload.get("instances", []):
-        if str(instance.get("label", "")) not in include_labels:
-            continue
-        mask_path = resolve_manifest_path(
-            manifest_path=segment_manifest_path,
-            relative_path=str(instance["mask_path"]),
-        )
-        instance_mask = np.asarray(Image.open(mask_path).convert("L"))
-        if instance_mask.shape[:2] != (height, width):
-            instance_mask = cv2.resize(instance_mask, (width, height), interpolation=cv2.INTER_NEAREST)
-        mask = cv2.bitwise_or(mask, np.where(instance_mask > 0, 255, 0).astype(np.uint8))
+    mask_path = resolve_manifest_path(
+        manifest_path=segment_manifest_path,
+        relative_path=str(instance["mask_path"]),
+    )
+    mask = np.asarray(Image.open(mask_path).convert("L"))
+    if mask.shape[:2] != (height, width):
+        mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
+    mask = np.where(mask > 0, 255, 0).astype(np.uint8)
 
     alpha = mask.astype(np.float32) / 255.0
     if erode_px > 0:
@@ -153,6 +195,25 @@ def _frame_alpha(
         kernel_size = feather_px * 2 + 1
         alpha = cv2.GaussianBlur(alpha, (kernel_size, kernel_size), 0)
     return np.clip(alpha, 0.0, 1.0)
+
+
+def _load_palette_manifest(path: Path | None) -> dict[str, str]:
+    if path is None:
+        return {}
+    payload = json.loads(path.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError(f"Palette manifest must be a JSON object: {path}")
+    tracks = payload.get("tracks", payload)
+    if not isinstance(tracks, dict):
+        raise ValueError(f"Palette manifest tracks must be a JSON object: {path}")
+
+    palette: dict[str, str] = {}
+    for track_id, color_hex in tracks.items():
+        if not isinstance(color_hex, str):
+            raise ValueError(f"Palette color for {track_id} must be a #RRGGBB string.")
+        _hex_to_rgb(color_hex)
+        palette[str(track_id)] = color_hex
+    return palette
 
 
 def _apply_lab_chroma(

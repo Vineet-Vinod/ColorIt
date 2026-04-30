@@ -210,7 +210,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Segment manifest JSON path aligned to the input clip.",
     )
     segment_recolor_parser.add_argument("--output", required=True, help="Output recolored clip path.")
-    segment_recolor_parser.add_argument("--color", required=True, help="Target #RRGGBB color.")
+    segment_recolor_parser.add_argument(
+        "--color",
+        default=None,
+        help="Fallback target #RRGGBB color. Required unless --palette-manifest covers every target track.",
+    )
+    segment_recolor_parser.add_argument(
+        "--palette-manifest",
+        default=None,
+        help="Optional JSON palette with {'tracks': {'track_id': '#RRGGBB'}}.",
+    )
     segment_recolor_parser.add_argument(
         "--include-label",
         action="append",
@@ -375,7 +384,8 @@ def handle_recolor_segments(args: argparse.Namespace) -> int:
         input_path=Path(args.input),
         segment_manifest_path=Path(args.segment_manifest),
         output_path=Path(args.output),
-        color_hex=str(args.color),
+        color_hex=str(args.color) if args.color else None,
+        palette_manifest_path=Path(args.palette_manifest) if args.palette_manifest else None,
         include_labels=list(args.include_label),
         chroma_blend=float(args.chroma_blend),
         mask_erode_px=int(args.mask_erode_px),

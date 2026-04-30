@@ -10,6 +10,7 @@ from src.pipeline.inference import colorize_image_file
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.movie import run_colorize_movie
 from src.pipeline.segment_clip import run_segment_clip
+from src.pipeline.segment_debug import run_render_segment_debug
 from src.pipeline.weights import run_download_weights
 
 
@@ -121,6 +122,39 @@ def build_parser() -> argparse.ArgumentParser:
     segment_parser.add_argument("--overwrite", action="store_true")
     segment_parser.set_defaults(handler=handle_segment_clip)
 
+    segment_debug_parser = subparsers.add_parser(
+        "render-segment-debug",
+        help="Render a video overlay for a segment manifest.",
+    )
+    segment_debug_parser.add_argument("--input", required=True, help="Input clip path.")
+    segment_debug_parser.add_argument(
+        "--segment-manifest",
+        required=True,
+        help="Segment manifest JSON path.",
+    )
+    segment_debug_parser.add_argument("--output", required=True, help="Output overlay video path.")
+    segment_debug_parser.add_argument(
+        "--include-label",
+        action="append",
+        default=[],
+        help="Only render this label. Can be passed multiple times.",
+    )
+    segment_debug_parser.add_argument(
+        "--include-track",
+        action="append",
+        default=[],
+        help="Only render this track id. Can be passed multiple times.",
+    )
+    segment_debug_parser.add_argument(
+        "--exclude-label",
+        action="append",
+        default=[],
+        help="Skip this label. Can be passed multiple times.",
+    )
+    segment_debug_parser.add_argument("--alpha", type=float, default=0.45)
+    segment_debug_parser.add_argument("--overwrite", action="store_true")
+    segment_debug_parser.set_defaults(handler=handle_render_segment_debug)
+
     return parser
 
 
@@ -209,6 +243,19 @@ def handle_segment_clip(args: argparse.Namespace) -> int:
         backend=str(args.backend),
         output_dir=Path(args.output_dir),
         tracks_path=Path(args.tracks) if args.tracks else None,
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_render_segment_debug(args: argparse.Namespace) -> int:
+    return run_render_segment_debug(
+        input_path=Path(args.input),
+        segment_manifest_path=Path(args.segment_manifest),
+        output_path=Path(args.output),
+        include_labels=list(args.include_label),
+        include_tracks=list(args.include_track),
+        exclude_labels=list(args.exclude_label),
+        alpha=float(args.alpha),
         overwrite=bool(args.overwrite),
     )
 

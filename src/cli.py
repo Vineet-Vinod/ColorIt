@@ -11,6 +11,7 @@ from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.movie import run_colorize_movie
 from src.pipeline.segment_clip import run_segment_clip
 from src.pipeline.segment_debug import run_render_segment_debug
+from src.pipeline.segment_filter import run_filter_segments
 from src.pipeline.weights import run_download_weights
 
 
@@ -166,6 +167,36 @@ def build_parser() -> argparse.ArgumentParser:
     segment_debug_parser.add_argument("--overwrite", action="store_true")
     segment_debug_parser.set_defaults(handler=handle_render_segment_debug)
 
+    segment_filter_parser = subparsers.add_parser(
+        "filter-segments",
+        help="Build a cleaned segment manifest from include and veto labels.",
+    )
+    segment_filter_parser.add_argument(
+        "--segment-manifest",
+        required=True,
+        help="Source segment manifest JSON path.",
+    )
+    segment_filter_parser.add_argument("--output-dir", required=True, help="Filtered segment directory.")
+    segment_filter_parser.add_argument(
+        "--include-label",
+        action="append",
+        default=[],
+        help="Include this source label. Can be passed multiple times.",
+    )
+    segment_filter_parser.add_argument(
+        "--veto-label",
+        action="append",
+        default=[],
+        help="Subtract this source label. Can be passed multiple times.",
+    )
+    segment_filter_parser.add_argument("--output-label", default="costume_candidate")
+    segment_filter_parser.add_argument("--min-area", type=int, default=500)
+    segment_filter_parser.add_argument("--close-px", type=int, default=0)
+    segment_filter_parser.add_argument("--erode-px", type=int, default=0)
+    segment_filter_parser.add_argument("--dilate-px", type=int, default=0)
+    segment_filter_parser.add_argument("--overwrite", action="store_true")
+    segment_filter_parser.set_defaults(handler=handle_filter_segments)
+
     return parser
 
 
@@ -269,6 +300,21 @@ def handle_render_segment_debug(args: argparse.Namespace) -> int:
         include_tracks=list(args.include_track),
         exclude_labels=list(args.exclude_label),
         alpha=float(args.alpha),
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_filter_segments(args: argparse.Namespace) -> int:
+    return run_filter_segments(
+        segment_manifest_path=Path(args.segment_manifest),
+        output_dir=Path(args.output_dir),
+        include_labels=list(args.include_label),
+        veto_labels=list(args.veto_label),
+        output_label=str(args.output_label),
+        min_area=int(args.min_area),
+        close_px=int(args.close_px),
+        erode_px=int(args.erode_px),
+        dilate_px=int(args.dilate_px),
         overwrite=bool(args.overwrite),
     )
 

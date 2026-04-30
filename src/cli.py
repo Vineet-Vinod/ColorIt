@@ -272,6 +272,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Blend current masks with previous masks warped by optical flow.",
     )
     segment_recolor_parser.add_argument(
+        "--temporal-flow-fill",
+        action="store_true",
+        help="Use warped previous masks to fill holes instead of averaging them into current masks.",
+    )
+    segment_recolor_parser.add_argument(
         "--temporal-carry-frames",
         type=int,
         default=0,
@@ -471,6 +476,7 @@ def handle_recolor_segments(args: argparse.Namespace) -> int:
         mask_feather_px=int(args.mask_feather_px),
         temporal_mask_blend=float(args.temporal_mask_blend),
         temporal_flow_blend=float(args.temporal_flow_blend),
+        temporal_flow_fill=bool(args.temporal_flow_fill),
         temporal_carry_frames=int(args.temporal_carry_frames),
         temporal_carry_decay=float(args.temporal_carry_decay),
         overwrite=bool(args.overwrite),

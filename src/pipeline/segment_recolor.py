@@ -32,6 +32,7 @@ def run_recolor_segments(
     mask_feather_px: int,
     temporal_mask_blend: float,
     temporal_flow_blend: float,
+    temporal_flow_fill: bool,
     temporal_carry_frames: int,
     temporal_carry_decay: float,
     overwrite: bool,
@@ -181,7 +182,10 @@ def run_recolor_segments(
                 )
                 if previous_alpha is not None and temporal_blend > 0.0:
                     blend = float(np.clip(temporal_blend, 0.0, 0.95))
-                    alpha = (1.0 - blend) * alpha + blend * previous_alpha
+                    if temporal_flow_fill and previous_gray is not None and temporal_flow_blend > 0.0:
+                        alpha = np.maximum(alpha, previous_alpha * blend)
+                    else:
+                        alpha = (1.0 - blend) * alpha + blend * previous_alpha
                 if protect_alpha is not None:
                     alpha = alpha * (1.0 - protect_alpha)
                 seen_track_ids.add(track_id)

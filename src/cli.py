@@ -265,6 +265,19 @@ def build_parser() -> argparse.ArgumentParser:
     segment_recolor_parser.add_argument("--mask-erode-px", type=int, default=1)
     segment_recolor_parser.add_argument("--mask-feather-px", type=int, default=3)
     segment_recolor_parser.add_argument("--temporal-mask-blend", type=float, default=0.20)
+    segment_recolor_parser.add_argument(
+        "--temporal-flow-blend",
+        type=float,
+        default=0.0,
+        help="Blend current masks with previous masks warped by optical flow.",
+    )
+    segment_recolor_parser.add_argument(
+        "--temporal-carry-frames",
+        type=int,
+        default=0,
+        help="Carry missing tracks forward for this many frames using optical-flow-warped alpha.",
+    )
+    segment_recolor_parser.add_argument("--temporal-carry-decay", type=float, default=0.72)
     segment_recolor_parser.add_argument("--overwrite", action="store_true")
     segment_recolor_parser.set_defaults(handler=handle_recolor_segments)
 
@@ -457,6 +470,9 @@ def handle_recolor_segments(args: argparse.Namespace) -> int:
         mask_erode_px=int(args.mask_erode_px),
         mask_feather_px=int(args.mask_feather_px),
         temporal_mask_blend=float(args.temporal_mask_blend),
+        temporal_flow_blend=float(args.temporal_flow_blend),
+        temporal_carry_frames=int(args.temporal_carry_frames),
+        temporal_carry_decay=float(args.temporal_carry_decay),
         overwrite=bool(args.overwrite),
     )
 

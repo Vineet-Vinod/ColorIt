@@ -31,6 +31,9 @@ def run_recolor_segments(
     mask_erode_px: int,
     mask_feather_px: int,
     temporal_mask_blend: float,
+    temporal_flow_blend: float,
+    temporal_carry_frames: int,
+    temporal_carry_decay: float,
     overwrite: bool,
 ) -> int:
     input_path = input_path.expanduser().resolve()
@@ -111,6 +114,9 @@ def run_recolor_segments(
         raise RuntimeError("ffmpeg rawvideo writer failed to expose stdin/stderr pipes.")
 
     previous_alpha_by_track: dict[str, np.ndarray] = {}
+    previous_color_by_track: dict[str, str] = {}
+    missed_frames_by_track: dict[str, int] = {}
+    previous_gray: np.ndarray | None = None
     frame_index = 0
     try:
         while True:
@@ -122,8 +128,17 @@ def run_recolor_segments(
                     f"Unexpected end of rawvideo stream; expected {frame_bytes} bytes, got {len(frame_data)}."
                 )
             frame_rgb = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
+            frame_gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+            warped_previous_alpha_by_track = _warp_previous_alphas(
+                previous_alpha_by_track=previous_alpha_by_track,
+                previous_gray=previous_gray,
+                current_gray=frame_gray,
+            ) if previous_gray is not None and (temporal_flow_blend > 0.0 or temporal_carry_frames > 0) else previous_alpha_by_track
             recolored = frame_rgb
             seen_track_ids: set[str] = set()
+            next_alpha_by_track: dict[str, np.ndarray] = {}
+            next_color_by_track: dict[str, str] = {}
+            next_missed_frames_by_track: dict[str, int] = {}
             protect_alpha = _frame_alpha(
                 frame_payload=protect_frames_by_index.get(frame_index, {"instances": []}),
                 segment_manifest_path=protect_segment_manifest_path,
@@ -158,27 +173,60 @@ def run_recolor_segments(
                     erode_px=mask_erode_px,
                     feather_px=mask_feather_px,
                 )
-                previous_alpha = previous_alpha_by_track.get(track_id)
-                if previous_alpha is not None and temporal_mask_blend > 0.0:
-                    blend = float(np.clip(temporal_mask_blend, 0.0, 0.95))
+                previous_alpha = warped_previous_alpha_by_track.get(track_id)
+                temporal_blend = (
+                    temporal_flow_blend
+                    if previous_gray is not None and temporal_flow_blend > 0.0
+                    else temporal_mask_blend
+                )
+                if previous_alpha is not None and temporal_blend > 0.0:
+                    blend = float(np.clip(temporal_blend, 0.0, 0.95))
                     alpha = (1.0 - blend) * alpha + blend * previous_alpha
                 if protect_alpha is not None:
                     alpha = alpha * (1.0 - protect_alpha)
-                previous_alpha_by_track[track_id] = alpha
                 seen_track_ids.add(track_id)
+                target_hex = str(instance["target_hex"])
+                next_alpha_by_track[track_id] = alpha
+                next_color_by_track[track_id] = target_hex
+                next_missed_frames_by_track[track_id] = 0
 
                 recolored = _apply_recolor(
                     base_rgb=recolored,
-                    target_hex=str(instance["target_hex"]),
+                    target_hex=target_hex,
                     mask_alpha=alpha,
                     recolor_mode=recolor_mode,
                     chroma_blend=chroma_blend,
                 )
-            previous_alpha_by_track = {
-                track_id: alpha
-                for track_id, alpha in previous_alpha_by_track.items()
-                if track_id in seen_track_ids
-            }
+
+            for track_id, previous_alpha in warped_previous_alpha_by_track.items():
+                if track_id in seen_track_ids:
+                    continue
+                missed_frames = missed_frames_by_track.get(track_id, 0) + 1
+                if missed_frames > temporal_carry_frames:
+                    continue
+                target_hex = previous_color_by_track.get(track_id)
+                if target_hex is None:
+                    continue
+                carried_alpha = previous_alpha * float(np.clip(temporal_carry_decay, 0.0, 1.0))
+                if protect_alpha is not None:
+                    carried_alpha = carried_alpha * (1.0 - protect_alpha)
+                if not np.any(carried_alpha > 0.01):
+                    continue
+                recolored = _apply_recolor(
+                    base_rgb=recolored,
+                    target_hex=target_hex,
+                    mask_alpha=carried_alpha,
+                    recolor_mode=recolor_mode,
+                    chroma_blend=chroma_blend,
+                )
+                next_alpha_by_track[track_id] = carried_alpha
+                next_color_by_track[track_id] = target_hex
+                next_missed_frames_by_track[track_id] = missed_frames
+
+            previous_alpha_by_track = next_alpha_by_track
+            previous_color_by_track = next_color_by_track
+            missed_frames_by_track = next_missed_frames_by_track
+            previous_gray = frame_gray
             writer.stdin.write(np.ascontiguousarray(recolored).tobytes())
             frame_index += 1
 
@@ -221,6 +269,44 @@ def _recolor_instances(
         output["target_hex"] = target_hex
         instances.append(output)
     return instances
+
+
+def _warp_previous_alphas(
+    *,
+    previous_alpha_by_track: dict[str, np.ndarray],
+    previous_gray: np.ndarray | None,
+    current_gray: np.ndarray,
+) -> dict[str, np.ndarray]:
+    if previous_gray is None or not previous_alpha_by_track:
+        return previous_alpha_by_track
+
+    current_to_previous_flow = cv2.calcOpticalFlowFarneback(
+        current_gray,
+        previous_gray,
+        None,
+        0.5,
+        3,
+        21,
+        3,
+        5,
+        1.2,
+        0,
+    )
+    height, width = current_gray.shape[:2]
+    grid_x, grid_y = np.meshgrid(np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32))
+    map_x = grid_x + current_to_previous_flow[:, :, 0]
+    map_y = grid_y + current_to_previous_flow[:, :, 1]
+    return {
+        track_id: cv2.remap(
+            alpha.astype(np.float32),
+            map_x,
+            map_y,
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0.0,
+        )
+        for track_id, alpha in previous_alpha_by_track.items()
+    }
 
 
 def _frame_alpha(

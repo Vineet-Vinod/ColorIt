@@ -23,6 +23,7 @@ def run_recolor_segments(
     protect_dilate_px: int,
     protect_feather_px: int,
     protect_skin_tones: bool,
+    protect_skin_tracks: list[str],
     skin_protect_dilate_px: int,
     skin_protect_feather_px: int,
     include_labels: list[str],
@@ -96,6 +97,7 @@ def run_recolor_segments(
     if not include_label_set:
         include_label_set = {str(track["label"]) for track in manifest["tracks"].values()}
     protect_label_set = set(protect_labels)
+    protect_skin_track_set = set(protect_skin_tracks)
 
     frame_bytes = width * height * 3
     reader = open_rawvideo_reader(input_path=input_path)
@@ -140,7 +142,7 @@ def run_recolor_segments(
             next_alpha_by_track: dict[str, np.ndarray] = {}
             next_color_by_track: dict[str, str] = {}
             next_missed_frames_by_track: dict[str, int] = {}
-            protect_alpha = _frame_alpha(
+            label_protect_alpha = _frame_alpha(
                 frame_payload=protect_frames_by_index.get(frame_index, {"instances": []}),
                 segment_manifest_path=protect_segment_manifest_path,
                 include_labels=protect_label_set,
@@ -155,10 +157,6 @@ def run_recolor_segments(
                 dilate_px=skin_protect_dilate_px,
                 feather_px=skin_protect_feather_px,
             ) if protect_skin_tones else None
-            if protect_alpha is not None and skin_alpha is not None:
-                protect_alpha = np.maximum(protect_alpha, skin_alpha)
-            elif skin_alpha is not None:
-                protect_alpha = skin_alpha
             for instance in _recolor_instances(
                 frame_payload=frames_by_index.get(frame_index, {"instances": []}),
                 include_labels=include_label_set,
@@ -186,6 +184,12 @@ def run_recolor_segments(
                         alpha = np.maximum(alpha, previous_alpha * blend)
                     else:
                         alpha = (1.0 - blend) * alpha + blend * previous_alpha
+                protect_alpha = _track_protect_alpha(
+                    label_protect_alpha=label_protect_alpha,
+                    skin_alpha=skin_alpha,
+                    track_id=track_id,
+                    protect_skin_track_set=protect_skin_track_set,
+                )
                 if protect_alpha is not None:
                     alpha = alpha * (1.0 - protect_alpha)
                 seen_track_ids.add(track_id)
@@ -212,6 +216,12 @@ def run_recolor_segments(
                 if target_hex is None:
                     continue
                 carried_alpha = previous_alpha * float(np.clip(temporal_carry_decay, 0.0, 1.0))
+                protect_alpha = _track_protect_alpha(
+                    label_protect_alpha=label_protect_alpha,
+                    skin_alpha=skin_alpha,
+                    track_id=track_id,
+                    protect_skin_track_set=protect_skin_track_set,
+                )
                 if protect_alpha is not None:
                     carried_alpha = carried_alpha * (1.0 - protect_alpha)
                 if not np.any(carried_alpha > 0.01):
@@ -273,6 +283,24 @@ def _recolor_instances(
         output["target_hex"] = target_hex
         instances.append(output)
     return instances
+
+
+def _track_protect_alpha(
+    *,
+    label_protect_alpha: np.ndarray | None,
+    skin_alpha: np.ndarray | None,
+    track_id: str,
+    protect_skin_track_set: set[str],
+) -> np.ndarray | None:
+    protect_alpha = label_protect_alpha
+    use_skin_alpha = skin_alpha is not None and (
+        not protect_skin_track_set or track_id in protect_skin_track_set
+    )
+    if use_skin_alpha and protect_alpha is not None:
+        return np.maximum(protect_alpha, skin_alpha)
+    if use_skin_alpha:
+        return skin_alpha
+    return protect_alpha
 
 
 def _warp_previous_alphas(

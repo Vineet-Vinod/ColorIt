@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import json
 from pathlib import Path
 from typing import Any
 
-from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
+from src.pipeline.manifest import load_json_manifest, utc_now_iso
 
 
 SEGMENT_MANIFEST_VERSION = 1
@@ -54,7 +55,9 @@ class SegmentManifest:
 
 
 def write_segment_manifest(path: Path, manifest: SegmentManifest) -> None:
-    write_json_manifest(path, segment_manifest_to_dict(manifest))
+    path = path.expanduser().resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(segment_manifest_to_dict(manifest), separators=(",", ":")) + "\n")
 
 
 def load_segment_manifest(path: Path) -> dict[str, Any]:
@@ -149,6 +152,8 @@ def validate_segment_manifest(
 
 def segment_manifest_to_dict(manifest: SegmentManifest) -> dict[str, Any]:
     payload = asdict(manifest)
+    if not payload.get("metadata"):
+        payload.pop("metadata", None)
     payload["tracks"] = {
         track_id: _drop_none_values(asdict(track))
         for track_id, track in manifest.tracks.items()
@@ -181,7 +186,11 @@ def resolve_manifest_path(*, manifest_path: Path, relative_path: str) -> Path:
 
 
 def _drop_none_values(payload: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in payload.items() if value is not None}
+    return {
+        key: value
+        for key, value in payload.items()
+        if value is not None and value != {} and value != []
+    }
 
 
 def _validate_instance(

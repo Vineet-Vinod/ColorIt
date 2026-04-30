@@ -59,7 +59,6 @@ def run_polygon_segmentation(
                 if track.get("confidence") is not None
                 else None
             ),
-            metadata=_track_metadata(track),
         )
         for track in track_payloads
     }
@@ -110,7 +109,6 @@ def run_polygon_segmentation(
                         mask_path=str(mask_path.relative_to(output_dir)),
                         bbox=mask_bbox(mask),
                         confidence=float(track.get("confidence", 1.0)),
-                        metadata=_instance_metadata(track),
                     )
                 )
 
@@ -135,7 +133,6 @@ def run_polygon_segmentation(
         fps=fps,
         tracks=tracks,
         frames=frames,
-        metadata={"source_tracks": str(tracks_path)},
     )
     write_segment_manifest(output_dir / "segment_manifest.json", manifest)
     return manifest
@@ -291,26 +288,3 @@ def _scale_point(point: list[float] | tuple[float, float], width: int, height: i
         return x * width, y * height
     return x, y
 
-
-def _track_metadata(track: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in track.items()
-        if key
-        not in {
-            "track_id",
-            "label",
-            "kind",
-            "parent_track_id",
-            "confidence",
-            "keyframes",
-        }
-    }
-
-
-def _instance_metadata(track: dict[str, Any]) -> dict[str, Any]:
-    metadata = _track_metadata(track)
-    color = track.get("color")
-    if color is not None:
-        metadata["color"] = str(color)
-    return metadata

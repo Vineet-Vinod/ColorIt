@@ -97,11 +97,6 @@ def run_human_parser_segmentation(
                         track_id=track_id,
                         label=label,
                         kind="human_part",
-                        metadata={
-                            "class_id": class_id,
-                            "raw_label": raw_label,
-                            "model_id": model_id,
-                        },
                     ),
                 )
 
@@ -116,11 +111,6 @@ def run_human_parser_segmentation(
                         mask_path=str(mask_path.relative_to(output_dir)),
                         bbox=mask_bbox(mask),
                         confidence=1.0,
-                        metadata={
-                            "class_id": class_id,
-                            "raw_label": raw_label,
-                            "model_id": model_id,
-                        },
                     )
                 )
 
@@ -145,11 +135,6 @@ def run_human_parser_segmentation(
         fps=fps,
         tracks=tracks,
         frames=frames,
-        metadata={
-            "model_id": model_id,
-            "device": str(selected_device),
-            "skip_background": skip_background,
-        },
     )
     write_segment_manifest(output_dir / "segment_manifest.json", manifest)
     return manifest

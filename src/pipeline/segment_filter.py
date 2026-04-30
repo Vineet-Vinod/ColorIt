@@ -50,15 +50,6 @@ def run_filter_segments(
         track_id=track_id,
         label=output_label,
         kind="filtered_segment",
-        metadata={
-            "source_manifest": str(segment_manifest_path),
-            "include_labels": sorted(include_label_set),
-            "veto_labels": sorted(veto_label_set),
-            "min_area": min_area,
-            "close_px": close_px,
-            "erode_px": erode_px,
-            "dilate_px": dilate_px,
-        },
     )
 
     frames: list[SegmentFrame] = []
@@ -106,9 +97,6 @@ def run_filter_segments(
                     mask_path=str(mask_path.relative_to(output_dir)),
                     bbox=mask_bbox(output_mask),
                     confidence=1.0,
-                    metadata={
-                        "source_frame_index": frame_index,
-                    },
                 )
             )
         frames.append(SegmentFrame(frame_index=frame_index, instances=instances))
@@ -122,10 +110,6 @@ def run_filter_segments(
         fps=str(source_manifest["fps"]),
         tracks={track_id: output_track},
         frames=frames,
-        metadata={
-            "source_manifest": str(segment_manifest_path),
-            "source_backend": source_manifest.get("backend"),
-        },
     )
     write_segment_manifest(output_dir / "segment_manifest.json", manifest)
     print(f"Filtered segment manifest written: {output_dir / 'segment_manifest.json'}")

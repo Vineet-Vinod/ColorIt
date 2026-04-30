@@ -22,6 +22,9 @@ def run_recolor_segments(
     protect_labels: list[str],
     protect_dilate_px: int,
     protect_feather_px: int,
+    protect_skin_tones: bool,
+    skin_protect_dilate_px: int,
+    skin_protect_feather_px: int,
     include_labels: list[str],
     recolor_mode: str,
     chroma_blend: float,
@@ -131,6 +134,15 @@ def run_recolor_segments(
                 dilate_px=protect_dilate_px,
                 feather_px=protect_feather_px,
             )
+            skin_alpha = _skin_tone_alpha(
+                frame_rgb=frame_rgb,
+                dilate_px=skin_protect_dilate_px,
+                feather_px=skin_protect_feather_px,
+            ) if protect_skin_tones else None
+            if protect_alpha is not None and skin_alpha is not None:
+                protect_alpha = np.maximum(protect_alpha, skin_alpha)
+            elif skin_alpha is not None:
+                protect_alpha = skin_alpha
             for instance in _recolor_instances(
                 frame_payload=frames_by_index.get(frame_index, {"instances": []}),
                 include_labels=include_label_set,
@@ -242,6 +254,33 @@ def _frame_alpha(
         alpha = cv2.erode(alpha, _kernel(erode_px), iterations=1)
     if dilate_px > 0:
         alpha = cv2.dilate(alpha, _kernel(dilate_px), iterations=1)
+    if feather_px > 0:
+        kernel_size = feather_px * 2 + 1
+        alpha = cv2.GaussianBlur(alpha, (kernel_size, kernel_size), 0)
+    return np.clip(alpha, 0.0, 1.0)
+
+
+def _skin_tone_alpha(
+    *,
+    frame_rgb: np.ndarray,
+    dilate_px: int,
+    feather_px: int,
+) -> np.ndarray:
+    ycrcb = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2YCrCb)
+    y = ycrcb[:, :, 0]
+    cr = ycrcb[:, :, 1]
+    cb = ycrcb[:, :, 2]
+    mask = (
+        (y > 35)
+        & (cr >= 132)
+        & (cr <= 178)
+        & (cb >= 78)
+        & (cb <= 138)
+        & ((cr.astype(np.int16) - cb.astype(np.int16)) >= 8)
+    ).astype(np.uint8) * 255
+    if dilate_px > 0:
+        mask = cv2.dilate(mask, _kernel(dilate_px), iterations=1)
+    alpha = mask.astype(np.float32) / 255.0
     if feather_px > 0:
         kernel_size = feather_px * 2 + 1
         alpha = cv2.GaussianBlur(alpha, (kernel_size, kernel_size), 0)

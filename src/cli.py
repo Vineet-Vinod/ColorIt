@@ -243,6 +243,13 @@ def build_parser() -> argparse.ArgumentParser:
     segment_recolor_parser.add_argument("--protect-dilate-px", type=int, default=0)
     segment_recolor_parser.add_argument("--protect-feather-px", type=int, default=0)
     segment_recolor_parser.add_argument(
+        "--protect-skin-tones",
+        action="store_true",
+        help="Suppress recolor on skin-like chroma regions in the input colorized frame.",
+    )
+    segment_recolor_parser.add_argument("--skin-protect-dilate-px", type=int, default=0)
+    segment_recolor_parser.add_argument("--skin-protect-feather-px", type=int, default=0)
+    segment_recolor_parser.add_argument(
         "--include-label",
         action="append",
         default=[],
@@ -441,6 +448,9 @@ def handle_recolor_segments(args: argparse.Namespace) -> int:
         protect_labels=list(args.protect_label),
         protect_dilate_px=int(args.protect_dilate_px),
         protect_feather_px=int(args.protect_feather_px),
+        protect_skin_tones=bool(args.protect_skin_tones),
+        skin_protect_dilate_px=int(args.skin_protect_dilate_px),
+        skin_protect_feather_px=int(args.skin_protect_feather_px),
         include_labels=list(args.include_label),
         recolor_mode=str(args.recolor_mode),
         chroma_blend=float(args.chroma_blend),

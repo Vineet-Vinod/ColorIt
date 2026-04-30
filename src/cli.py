@@ -12,6 +12,7 @@ from src.pipeline.movie import run_colorize_movie
 from src.pipeline.segment_clip import run_segment_clip
 from src.pipeline.segment_debug import run_render_segment_debug
 from src.pipeline.segment_filter import run_filter_segments
+from src.pipeline.segment_recolor import run_recolor_segments
 from src.pipeline.weights import run_download_weights
 
 
@@ -197,6 +198,31 @@ def build_parser() -> argparse.ArgumentParser:
     segment_filter_parser.add_argument("--overwrite", action="store_true")
     segment_filter_parser.set_defaults(handler=handle_filter_segments)
 
+    segment_recolor_parser = subparsers.add_parser(
+        "recolor-segments",
+        help="Apply a fixed chroma color inside segment masks of an existing colorized clip.",
+    )
+    segment_recolor_parser.add_argument("--input", required=True, help="Input colorized clip path.")
+    segment_recolor_parser.add_argument(
+        "--segment-manifest",
+        required=True,
+        help="Segment manifest JSON path aligned to the input clip.",
+    )
+    segment_recolor_parser.add_argument("--output", required=True, help="Output recolored clip path.")
+    segment_recolor_parser.add_argument("--color", required=True, help="Target #RRGGBB color.")
+    segment_recolor_parser.add_argument(
+        "--include-label",
+        action="append",
+        default=[],
+        help="Only recolor this label. Defaults to all labels in the manifest.",
+    )
+    segment_recolor_parser.add_argument("--chroma-blend", type=float, default=0.70)
+    segment_recolor_parser.add_argument("--mask-erode-px", type=int, default=1)
+    segment_recolor_parser.add_argument("--mask-feather-px", type=int, default=3)
+    segment_recolor_parser.add_argument("--temporal-mask-blend", type=float, default=0.20)
+    segment_recolor_parser.add_argument("--overwrite", action="store_true")
+    segment_recolor_parser.set_defaults(handler=handle_recolor_segments)
+
     return parser
 
 
@@ -315,6 +341,21 @@ def handle_filter_segments(args: argparse.Namespace) -> int:
         close_px=int(args.close_px),
         erode_px=int(args.erode_px),
         dilate_px=int(args.dilate_px),
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_recolor_segments(args: argparse.Namespace) -> int:
+    return run_recolor_segments(
+        input_path=Path(args.input),
+        segment_manifest_path=Path(args.segment_manifest),
+        output_path=Path(args.output),
+        color_hex=str(args.color),
+        include_labels=list(args.include_label),
+        chroma_blend=float(args.chroma_blend),
+        mask_erode_px=int(args.mask_erode_px),
+        mask_feather_px=int(args.mask_feather_px),
+        temporal_mask_blend=float(args.temporal_mask_blend),
         overwrite=bool(args.overwrite),
     )
 

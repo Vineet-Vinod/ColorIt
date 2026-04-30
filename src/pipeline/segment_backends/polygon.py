@@ -123,6 +123,8 @@ def run_polygon_segmentation(
 
     if reader_returncode != 0:
         raise RuntimeError(f"ffmpeg rawvideo reader failed: {reader.stderr.read().decode().strip()}")
+    if reader.stderr is not None:
+        reader.stderr.close()
 
     manifest = SegmentManifest(
         source_clip=str(input_path),

@@ -110,3 +110,17 @@ data/segments/<clip>/
 
 Each manifest records clip metadata, backend name, track metadata, frame-local
 instances, mask paths, bounding boxes, labels, and confidence values.
+
+Render a debug overlay for visual review:
+
+```bash
+uv run colorit render-segment-debug \
+  --input data/eval/clips/multiple.mp4 \
+  --segment-manifest data/segments/multiple/segment_manifest.json \
+  --output data/segments/multiple/debug_overlay.mp4 \
+  --include-label clothing \
+  --overwrite
+```
+
+Use `--include-label`, `--include-track`, and `--exclude-label` to focus review
+on specific segment classes or tracks.

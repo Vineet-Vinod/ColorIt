@@ -13,6 +13,12 @@ dependencies = [
   "torchvision>=0.21,<1",
 ]
 
+[project.optional-dependencies]
+segmentation = [
+  "safetensors>=0.4,<1",
+  "transformers>=4.45,<6",
+]
+
 [project.scripts]
 colorit = "src.cli:main"
 

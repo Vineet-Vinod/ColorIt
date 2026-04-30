@@ -110,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     segment_parser.add_argument(
         "--backend",
         default="polygon",
-        choices=("polygon",),
+        choices=("polygon", "human-parser"),
         help="Segmentation backend to run.",
     )
     segment_parser.add_argument("--output-dir", required=True, help="Segment artifact directory.")
@@ -118,6 +118,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--tracks",
         default=None,
         help="Backend-specific polygon track JSON file.",
+    )
+    segment_parser.add_argument(
+        "--model-id",
+        default=None,
+        help="Backend-specific model id. Defaults to the vetted human parser model.",
+    )
+    segment_parser.add_argument(
+        "--device",
+        default="auto",
+        choices=("auto", "cpu", "mps"),
+        help="Model device for model-backed segmentation backends.",
     )
     segment_parser.add_argument("--overwrite", action="store_true")
     segment_parser.set_defaults(handler=handle_segment_clip)
@@ -243,6 +254,8 @@ def handle_segment_clip(args: argparse.Namespace) -> int:
         backend=str(args.backend),
         output_dir=Path(args.output_dir),
         tracks_path=Path(args.tracks) if args.tracks else None,
+        model_id=args.model_id,
+        device=str(args.device),
         overwrite=bool(args.overwrite),
     )
 

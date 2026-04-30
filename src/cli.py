@@ -9,6 +9,7 @@ from src.pipeline.ffmpeg_utils import compress_video
 from src.pipeline.inference import colorize_image_file
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.movie import run_colorize_movie
+from src.pipeline.segment_clip import run_segment_clip
 from src.pipeline.weights import run_download_weights
 
 
@@ -100,6 +101,26 @@ def build_parser() -> argparse.ArgumentParser:
     compress_parser.add_argument("--overwrite", action="store_true")
     compress_parser.set_defaults(handler=handle_compress_video)
 
+    segment_parser = subparsers.add_parser(
+        "segment-clip",
+        help="Generate a reusable segment manifest and masks for a clip.",
+    )
+    segment_parser.add_argument("--input", required=True, help="Input clip path.")
+    segment_parser.add_argument(
+        "--backend",
+        default="polygon",
+        choices=("polygon",),
+        help="Segmentation backend to run.",
+    )
+    segment_parser.add_argument("--output-dir", required=True, help="Segment artifact directory.")
+    segment_parser.add_argument(
+        "--tracks",
+        default=None,
+        help="Backend-specific polygon track JSON file.",
+    )
+    segment_parser.add_argument("--overwrite", action="store_true")
+    segment_parser.set_defaults(handler=handle_segment_clip)
+
     return parser
 
 
@@ -178,6 +199,16 @@ def handle_colorize_movie(args: argparse.Namespace) -> int:
         keep_intermediates=bool(args.keep_intermediates),
         resume=bool(args.resume),
         limit=args.limit,
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_segment_clip(args: argparse.Namespace) -> int:
+    return run_segment_clip(
+        input_path=Path(args.input),
+        backend=str(args.backend),
+        output_dir=Path(args.output_dir),
+        tracks_path=Path(args.tracks) if args.tracks else None,
         overwrite=bool(args.overwrite),
     )
 

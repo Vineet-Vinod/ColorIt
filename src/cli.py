@@ -254,6 +254,18 @@ def build_parser() -> argparse.ArgumentParser:
     segment_track_parser.add_argument("--iou-threshold", type=float, default=0.10)
     segment_track_parser.add_argument("--max-center-distance", type=float, default=180.0)
     segment_track_parser.add_argument("--max-missing-frames", type=int, default=3)
+    segment_track_parser.add_argument(
+        "--split-wide-components",
+        action="store_true",
+        help="Split oversized connected components at vertical mask-density valleys before tracking.",
+    )
+    segment_track_parser.add_argument(
+        "--max-component-width-ratio",
+        type=float,
+        default=0.42,
+        help="Frame-width ratio above which --split-wide-components may split a component.",
+    )
+    segment_track_parser.add_argument("--min-split-valley-ratio", type=float, default=0.45)
     segment_track_parser.add_argument("--overwrite", action="store_true")
     segment_track_parser.set_defaults(handler=handle_track_segments)
 
@@ -405,6 +417,9 @@ def handle_track_segments(args: argparse.Namespace) -> int:
         iou_threshold=float(args.iou_threshold),
         max_center_distance=float(args.max_center_distance),
         max_missing_frames=int(args.max_missing_frames),
+        split_wide_components=bool(args.split_wide_components),
+        max_component_width_ratio=float(args.max_component_width_ratio),
+        min_split_valley_ratio=float(args.min_split_valley_ratio),
         overwrite=bool(args.overwrite),
     )
 

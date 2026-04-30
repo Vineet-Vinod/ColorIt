@@ -47,6 +47,9 @@ def run_track_segments(
     iou_threshold: float,
     max_center_distance: float,
     max_missing_frames: int,
+    split_wide_components: bool,
+    max_component_width_ratio: float,
+    min_split_valley_ratio: float,
     overwrite: bool,
 ) -> int:
     segment_manifest_path = segment_manifest_path.expanduser().resolve()
@@ -78,7 +81,13 @@ def run_track_segments(
             width=width,
             height=height,
         )
-        components = _components_from_mask(frame_mask, min_area=min_area)
+        components = _components_from_mask(
+            frame_mask,
+            min_area=min_area,
+            split_wide_components=split_wide_components,
+            max_component_width=int(round(width * max_component_width_ratio)),
+            min_split_valley_ratio=min_split_valley_ratio,
+        )
         assignments = _assign_components_to_tracks(
             components=components,
             active_tracks=active_tracks,
@@ -174,7 +183,14 @@ def _combined_frame_mask(
     return output
 
 
-def _components_from_mask(mask: np.ndarray, *, min_area: int) -> list[Component]:
+def _components_from_mask(
+    mask: np.ndarray,
+    *,
+    min_area: int,
+    split_wide_components: bool,
+    max_component_width: int,
+    min_split_valley_ratio: float,
+) -> list[Component]:
     component_count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
     components: list[Component] = []
     for component_index in range(1, component_count):
@@ -183,16 +199,86 @@ def _components_from_mask(mask: np.ndarray, *, min_area: int) -> list[Component]
             continue
         component_mask = np.zeros(mask.shape, dtype=np.uint8)
         component_mask[labels == component_index] = 255
-        components.append(
-            Component(
-                mask=component_mask,
-                bbox=mask_bbox(component_mask),
-                centroid=(float(centroids[component_index][0]), float(centroids[component_index][1])),
-                area=area,
+        split_masks = [component_mask]
+        if split_wide_components:
+            split_masks = _split_wide_component(
+                component_mask,
+                min_area=min_area,
+                max_component_width=max_component_width,
+                min_split_valley_ratio=min_split_valley_ratio,
             )
-        )
+        for split_mask in split_masks:
+            split_area = int(np.count_nonzero(split_mask))
+            if split_area < min_area:
+                continue
+            bbox = mask_bbox(split_mask)
+            moments = cv2.moments(split_mask, binaryImage=True)
+            if moments["m00"] == 0:
+                continue
+            components.append(
+                Component(
+                    mask=split_mask,
+                    bbox=bbox,
+                    centroid=(float(moments["m10"] / moments["m00"]), float(moments["m01"] / moments["m00"])),
+                    area=split_area,
+                )
+            )
     components.sort(key=lambda component: component.bbox[0])
     return components
+
+
+def _split_wide_component(
+    mask: np.ndarray,
+    *,
+    min_area: int,
+    max_component_width: int,
+    min_split_valley_ratio: float,
+) -> list[np.ndarray]:
+    bbox = mask_bbox(mask)
+    x1, y1, x2, y2 = bbox
+    width = x2 - x1
+    if width <= max(max_component_width, 1):
+        return [mask]
+
+    cropped = mask[y1:y2, x1:x2] > 0
+    projection = cropped.sum(axis=0).astype(np.float32)
+    if projection.size < 3:
+        return [mask]
+    smooth_width = max(5, min(31, (projection.size // 12) | 1))
+    kernel = np.ones(smooth_width, dtype=np.float32) / float(smooth_width)
+    smoothed = np.convolve(projection, kernel, mode="same")
+
+    margin = max(4, int(round(projection.size * 0.18)))
+    if margin * 2 >= projection.size:
+        return [mask]
+    search = smoothed[margin:-margin]
+    if search.size == 0:
+        return [mask]
+
+    split_x = int(np.argmin(search) + margin)
+    valley = float(smoothed[split_x])
+    average = float(smoothed.mean())
+    if average <= 0.0 or valley > average * float(min_split_valley_ratio):
+        return [mask]
+
+    left = np.zeros(mask.shape, dtype=np.uint8)
+    right = np.zeros(mask.shape, dtype=np.uint8)
+    left[:, : x1 + split_x] = mask[:, : x1 + split_x]
+    right[:, x1 + split_x :] = mask[:, x1 + split_x :]
+    if np.count_nonzero(left) < min_area or np.count_nonzero(right) < min_area:
+        return [mask]
+
+    output: list[np.ndarray] = []
+    for split_mask in (left, right):
+        output.extend(
+            _split_wide_component(
+                split_mask,
+                min_area=min_area,
+                max_component_width=max_component_width,
+                min_split_valley_ratio=min_split_valley_ratio,
+            )
+        )
+    return output
 
 
 def _assign_components_to_tracks(

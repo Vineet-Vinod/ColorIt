@@ -79,3 +79,34 @@ The optimized path uses:
 - one model load reused across the whole batch pass
 - scene, batch, and top-level movie manifests for deterministic resume
 - optional scene artifact cleanup after successful assembly
+
+## Segmentation Manifests
+
+The `segment-clip` command creates reusable per-frame mask manifests for
+downstream experiments such as costume recoloring, actor-only postprocesses, and
+region-specific temporal smoothing.
+
+```bash
+uv run colorit segment-clip \
+  --input data/eval/clips/multiple.mp4 \
+  --backend polygon \
+  --tracks data/eval/tracks/multiple_tracks.json \
+  --output-dir data/segments/multiple \
+  --overwrite
+```
+
+The first backend is `polygon`, a model-free debug backend that interpolates
+track keyframes. It is useful for validating downstream consumers before adding
+model-backed human parsing or video segmentation.
+
+Segment manifests are written as:
+
+```text
+data/segments/<clip>/
+  segment_manifest.json
+  masks/
+    frame_000000_track_0001.png
+```
+
+Each manifest records clip metadata, backend name, track metadata, frame-local
+instances, mask paths, bounding boxes, labels, and confidence values.

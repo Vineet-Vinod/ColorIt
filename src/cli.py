@@ -13,6 +13,7 @@ from src.pipeline.segment_clip import run_segment_clip
 from src.pipeline.segment_debug import run_render_segment_debug
 from src.pipeline.segment_filter import run_filter_segments
 from src.pipeline.segment_recolor import run_recolor_segments
+from src.pipeline.segment_track import run_track_segments
 from src.pipeline.weights import run_download_weights
 
 
@@ -223,6 +224,30 @@ def build_parser() -> argparse.ArgumentParser:
     segment_recolor_parser.add_argument("--overwrite", action="store_true")
     segment_recolor_parser.set_defaults(handler=handle_recolor_segments)
 
+    segment_track_parser = subparsers.add_parser(
+        "track-segments",
+        help="Split segment masks into connected components and track them over time.",
+    )
+    segment_track_parser.add_argument(
+        "--segment-manifest",
+        required=True,
+        help="Source segment manifest JSON path.",
+    )
+    segment_track_parser.add_argument("--output-dir", required=True, help="Tracked segment directory.")
+    segment_track_parser.add_argument(
+        "--include-label",
+        action="append",
+        default=[],
+        help="Only track this label. Defaults to all labels in the manifest.",
+    )
+    segment_track_parser.add_argument("--output-label", default="costume_track")
+    segment_track_parser.add_argument("--min-area", type=int, default=1000)
+    segment_track_parser.add_argument("--iou-threshold", type=float, default=0.10)
+    segment_track_parser.add_argument("--max-center-distance", type=float, default=180.0)
+    segment_track_parser.add_argument("--max-missing-frames", type=int, default=3)
+    segment_track_parser.add_argument("--overwrite", action="store_true")
+    segment_track_parser.set_defaults(handler=handle_track_segments)
+
     return parser
 
 
@@ -356,6 +381,20 @@ def handle_recolor_segments(args: argparse.Namespace) -> int:
         mask_erode_px=int(args.mask_erode_px),
         mask_feather_px=int(args.mask_feather_px),
         temporal_mask_blend=float(args.temporal_mask_blend),
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_track_segments(args: argparse.Namespace) -> int:
+    return run_track_segments(
+        segment_manifest_path=Path(args.segment_manifest),
+        output_dir=Path(args.output_dir),
+        include_labels=list(args.include_label),
+        output_label=str(args.output_label),
+        min_area=int(args.min_area),
+        iou_threshold=float(args.iou_threshold),
+        max_center_distance=float(args.max_center_distance),
+        max_missing_frames=int(args.max_missing_frames),
         overwrite=bool(args.overwrite),
     )
 

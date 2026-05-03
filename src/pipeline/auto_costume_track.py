@@ -102,6 +102,7 @@ def run_auto_costume_track(
     )
 
     active_actors: dict[str, ActiveActor] = {}
+    active_actor_partitions: dict[str, ActorPartition] = {}
     next_actor_number = 1
     output_frames: list[SegmentFrame] = []
     track_stats: dict[str, TrackStats] = {}
@@ -125,6 +126,11 @@ def run_auto_costume_track(
                 actor_manifest_path=actor_manifest_path,
                 width=width,
                 height=height,
+            )
+            actor_partitions = _carry_actor_partitions(
+                current_partitions=actor_partitions,
+                active_partitions=active_actor_partitions,
+                actor_max_missing=actor_max_missing,
             )
         else:
             guide_mask = _combine_masks(masks_by_label, actor_guide_label_set, height=height, width=width)
@@ -291,6 +297,40 @@ def _actor_partitions_from_manifest(
             centroid = (float(moments["m10"] / moments["m00"]), float(moments["m01"] / moments["m00"]))
         partitions.append(ActorPartition(actor_id=actor_id, centroid=centroid, mask=mask, missing_frames=0))
     return sorted(partitions, key=lambda partition: partition.centroid[0])
+
+
+def _carry_actor_partitions(
+    *,
+    current_partitions: list[ActorPartition],
+    active_partitions: dict[str, ActorPartition],
+    actor_max_missing: int,
+) -> list[ActorPartition]:
+    current_ids = {partition.actor_id for partition in current_partitions}
+    for partition in current_partitions:
+        active_partitions[partition.actor_id] = partition
+
+    stale_actor_ids: list[str] = []
+    carried_partitions = list(current_partitions)
+    for actor_id, partition in list(active_partitions.items()):
+        if actor_id in current_ids:
+            continue
+        missing_frames = partition.missing_frames + 1
+        if missing_frames > actor_max_missing:
+            stale_actor_ids.append(actor_id)
+            continue
+        carried_partition = ActorPartition(
+            actor_id=actor_id,
+            centroid=partition.centroid,
+            mask=partition.mask,
+            missing_frames=missing_frames,
+        )
+        active_partitions[actor_id] = carried_partition
+        carried_partitions.append(carried_partition)
+
+    for actor_id in stale_actor_ids:
+        active_partitions.pop(actor_id, None)
+
+    return sorted(carried_partitions, key=lambda partition: partition.centroid[0])
 
 
 def _guide_anchors(

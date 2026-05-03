@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from src.pipeline.actor_stitch import run_stitch_actors
 from src.pipeline.auto_costume_track import run_auto_costume_track
 from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import load_config
@@ -393,6 +394,20 @@ def build_parser() -> argparse.ArgumentParser:
     auto_costume_parser.add_argument("--overwrite", action="store_true")
     auto_costume_parser.set_defaults(handler=handle_auto_costume_track)
 
+    stitch_actor_parser = subparsers.add_parser(
+        "stitch-actors",
+        help="Merge fragmented actor detections into stable actor tracks.",
+    )
+    stitch_actor_parser.add_argument("--actor-manifest", required=True, help="Source actor segment manifest.")
+    stitch_actor_parser.add_argument("--output-dir", required=True, help="Output stitched actor directory.")
+    stitch_actor_parser.add_argument("--min-source-frames", type=int, default=2)
+    stitch_actor_parser.add_argument("--max-gap-frames", type=int, default=35)
+    stitch_actor_parser.add_argument("--max-centroid-distance", type=float, default=360.0)
+    stitch_actor_parser.add_argument("--min-iou", type=float, default=0.02)
+    stitch_actor_parser.add_argument("--allow-overlap-frames", type=int, default=2)
+    stitch_actor_parser.add_argument("--overwrite", action="store_true")
+    stitch_actor_parser.set_defaults(handler=handle_stitch_actors)
+
     return parser
 
 
@@ -595,6 +610,19 @@ def handle_auto_costume_track(args: argparse.Namespace) -> int:
         close_px=int(args.close_px),
         erode_px=int(args.erode_px),
         dilate_px=int(args.dilate_px),
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_stitch_actors(args: argparse.Namespace) -> int:
+    return run_stitch_actors(
+        actor_manifest_path=Path(args.actor_manifest),
+        output_dir=Path(args.output_dir),
+        min_source_frames=int(args.min_source_frames),
+        max_gap_frames=int(args.max_gap_frames),
+        max_centroid_distance=float(args.max_centroid_distance),
+        min_iou=float(args.min_iou),
+        allow_overlap_frames=int(args.allow_overlap_frames),
         overwrite=bool(args.overwrite),
     )
 

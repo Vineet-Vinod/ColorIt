@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from src.pipeline.auto_costume_track import run_auto_costume_track
 from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import load_config
 from src.pipeline.ffmpeg_utils import compress_video
@@ -340,6 +341,47 @@ def build_parser() -> argparse.ArgumentParser:
     segment_track_parser.add_argument("--overwrite", action="store_true")
     segment_track_parser.set_defaults(handler=handle_track_segments)
 
+    auto_costume_parser = subparsers.add_parser(
+        "auto-costume-track",
+        help="Create actor-scoped costume tracks from parser/SAM-style masks.",
+    )
+    auto_costume_parser.add_argument(
+        "--human-parser-manifest",
+        required=True,
+        help="Human parser segment manifest JSON path.",
+    )
+    auto_costume_parser.add_argument("--output-dir", required=True, help="Output segment artifact directory.")
+    auto_costume_parser.add_argument(
+        "--actor-guide-label",
+        action="append",
+        default=[],
+        help="Label used to auto-detect actor anchors. Defaults to face and hair.",
+    )
+    auto_costume_parser.add_argument(
+        "--clothing-label",
+        action="append",
+        default=[],
+        help="Clothing label to turn into actor-scoped costume proposals.",
+    )
+    auto_costume_parser.add_argument(
+        "--skin-label",
+        action="append",
+        default=[],
+        help="Label to subtract from costume proposals.",
+    )
+    auto_costume_parser.add_argument("--min-mask-area", type=int, default=800)
+    auto_costume_parser.add_argument("--min-confidence", type=float, default=0.18)
+    auto_costume_parser.add_argument("--guide-min-area", type=int, default=120)
+    auto_costume_parser.add_argument("--guide-merge-distance", type=float, default=95.0)
+    auto_costume_parser.add_argument("--actor-max-distance", type=float, default=150.0)
+    auto_costume_parser.add_argument("--actor-max-missing", type=int, default=6)
+    auto_costume_parser.add_argument("--skin-dilate-px", type=int, default=5)
+    auto_costume_parser.add_argument("--close-px", type=int, default=3)
+    auto_costume_parser.add_argument("--erode-px", type=int, default=1)
+    auto_costume_parser.add_argument("--dilate-px", type=int, default=0)
+    auto_costume_parser.add_argument("--overwrite", action="store_true")
+    auto_costume_parser.set_defaults(handler=handle_auto_costume_track)
+
     return parser
 
 
@@ -514,6 +556,27 @@ def handle_track_segments(args: argparse.Namespace) -> int:
         preserve_source_instances=bool(args.preserve_source_instances),
         max_component_width_ratio=float(args.max_component_width_ratio),
         min_split_valley_ratio=float(args.min_split_valley_ratio),
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_auto_costume_track(args: argparse.Namespace) -> int:
+    return run_auto_costume_track(
+        human_parser_manifest_path=Path(args.human_parser_manifest),
+        output_dir=Path(args.output_dir),
+        actor_guide_labels=list(args.actor_guide_label),
+        clothing_labels=list(args.clothing_label),
+        skin_labels=list(args.skin_label),
+        min_mask_area=int(args.min_mask_area),
+        min_confidence=float(args.min_confidence),
+        guide_min_area=int(args.guide_min_area),
+        guide_merge_distance=float(args.guide_merge_distance),
+        actor_max_distance=float(args.actor_max_distance),
+        actor_max_missing=int(args.actor_max_missing),
+        skin_dilate_px=int(args.skin_dilate_px),
+        close_px=int(args.close_px),
+        erode_px=int(args.erode_px),
+        dilate_px=int(args.dilate_px),
         overwrite=bool(args.overwrite),
     )
 

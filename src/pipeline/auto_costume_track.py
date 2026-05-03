@@ -41,9 +41,18 @@ class TrackStats:
     anchors: list[tuple[float, int, int]] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class ActorPartition:
+    actor_id: str
+    centroid: tuple[float, float]
+    mask: np.ndarray | None
+    missing_frames: int
+
+
 def run_auto_costume_track(
     *,
     human_parser_manifest_path: Path,
+    actor_manifest_path: Path | None,
     output_dir: Path,
     actor_guide_labels: list[str],
     clothing_labels: list[str],
@@ -61,9 +70,13 @@ def run_auto_costume_track(
     overwrite: bool,
 ) -> int:
     human_parser_manifest_path = human_parser_manifest_path.expanduser().resolve()
+    if actor_manifest_path is not None:
+        actor_manifest_path = actor_manifest_path.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
     if not human_parser_manifest_path.exists():
         raise FileNotFoundError(f"Human parser manifest not found: {human_parser_manifest_path}")
+    if actor_manifest_path is not None and not actor_manifest_path.exists():
+        raise FileNotFoundError(f"Actor manifest not found: {actor_manifest_path}")
     if output_dir.exists() and any(output_dir.iterdir()) and not overwrite:
         raise FileExistsError(f"Segment output dir is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -72,8 +85,21 @@ def run_auto_costume_track(
     clothing_label_set = set(clothing_labels or DEFAULT_CLOTHING_LABELS)
     skin_label_set = set(skin_labels or DEFAULT_SKIN_LABELS)
     manifest = load_segment_manifest(human_parser_manifest_path)
+    actor_manifest = load_segment_manifest(actor_manifest_path) if actor_manifest_path is not None else None
     width = int(manifest["width"])
     height = int(manifest["height"])
+    if actor_manifest is not None and (
+        int(actor_manifest["width"]) != width or int(actor_manifest["height"]) != height
+    ):
+        raise ValueError(
+            f"Actor manifest dimensions {actor_manifest['width']}x{actor_manifest['height']} do not match "
+            f"human parser manifest dimensions {width}x{height}."
+        )
+    actor_frames_by_index = (
+        {int(frame["frame_index"]): frame for frame in actor_manifest["frames"]}
+        if actor_manifest is not None
+        else {}
+    )
 
     active_actors: dict[str, ActiveActor] = {}
     next_actor_number = 1
@@ -88,24 +114,37 @@ def run_auto_costume_track(
             width=width,
             height=height,
         )
-        guide_mask = _combine_masks(masks_by_label, actor_guide_label_set, height=height, width=width)
         skin_mask = _combine_masks(masks_by_label, skin_label_set, height=height, width=width)
         if skin_dilate_px > 0:
             skin_mask = cv2.dilate(skin_mask, _kernel(skin_dilate_px), iterations=1)
 
-        guide_anchors = _guide_anchors(
-            guide_mask=guide_mask,
-            guide_min_area=guide_min_area,
-            guide_merge_distance=guide_merge_distance,
-        )
-        assigned_actors, next_actor_number = _assign_actors(
-            anchors=guide_anchors,
-            active_actors=active_actors,
-            frame_index=frame_index,
-            next_actor_number=next_actor_number,
-            actor_max_distance=actor_max_distance,
-            actor_max_missing=actor_max_missing,
-        )
+        actor_partitions: list[ActorPartition]
+        if actor_manifest_path is not None:
+            actor_partitions = _actor_partitions_from_manifest(
+                frame_payload=actor_frames_by_index.get(frame_index, {"instances": []}),
+                actor_manifest_path=actor_manifest_path,
+                width=width,
+                height=height,
+            )
+        else:
+            guide_mask = _combine_masks(masks_by_label, actor_guide_label_set, height=height, width=width)
+            guide_anchors = _guide_anchors(
+                guide_mask=guide_mask,
+                guide_min_area=guide_min_area,
+                guide_merge_distance=guide_merge_distance,
+            )
+            assigned_actors, next_actor_number = _assign_actors(
+                anchors=guide_anchors,
+                active_actors=active_actors,
+                frame_index=frame_index,
+                next_actor_number=next_actor_number,
+                actor_max_distance=actor_max_distance,
+                actor_max_missing=actor_max_missing,
+            )
+            actor_partitions = [
+                ActorPartition(actor_id=actor_id, centroid=centroid, mask=None, missing_frames=missing)
+                for actor_id, centroid, missing in assigned_actors
+            ]
 
         instances: list[SegmentInstance] = []
         for clothing_label in sorted(clothing_label_set):
@@ -122,7 +161,7 @@ def run_auto_costume_track(
             )
             for actor_id, actor_mask, actor_missing in _split_by_actors(
                 mask=candidate_mask,
-                actors=assigned_actors,
+                actors=actor_partitions,
                 min_area=min_mask_area,
             ):
                 area = int(np.count_nonzero(actor_mask))
@@ -176,6 +215,7 @@ def run_auto_costume_track(
         tracks=output_tracks,
         frames=output_frames,
         metadata={
+            "actor_manifest": str(actor_manifest_path) if actor_manifest_path is not None else None,
             "actor_guide_labels": sorted(actor_guide_label_set),
             "clothing_labels": sorted(clothing_label_set),
             "skin_labels": sorted(skin_label_set),
@@ -221,6 +261,36 @@ def _combine_masks(
         for mask in masks_by_label.get(label, []):
             output = cv2.bitwise_or(output, mask)
     return output
+
+
+def _actor_partitions_from_manifest(
+    *,
+    frame_payload: dict,
+    actor_manifest_path: Path,
+    width: int,
+    height: int,
+) -> list[ActorPartition]:
+    partitions: list[ActorPartition] = []
+    for instance in frame_payload.get("instances", []):
+        actor_id = str(instance.get("track_id", ""))
+        if not actor_id:
+            continue
+        mask_path = resolve_manifest_path(
+            manifest_path=actor_manifest_path,
+            relative_path=str(instance["mask_path"]),
+        )
+        mask = np.asarray(Image.open(mask_path).convert("L"))
+        if mask.shape[:2] != (height, width):
+            mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
+        mask = np.where(mask > 0, 255, 0).astype(np.uint8)
+        moments = cv2.moments(mask, binaryImage=True)
+        bbox = mask_bbox(mask)
+        if moments["m00"] == 0:
+            centroid = ((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0)
+        else:
+            centroid = (float(moments["m10"] / moments["m00"]), float(moments["m01"] / moments["m00"]))
+        partitions.append(ActorPartition(actor_id=actor_id, centroid=centroid, mask=mask, missing_frames=0))
+    return sorted(partitions, key=lambda partition: partition.centroid[0])
 
 
 def _guide_anchors(
@@ -317,30 +387,49 @@ def _assign_actors(
 def _split_by_actors(
     *,
     mask: np.ndarray,
-    actors: list[tuple[str, tuple[float, float], int]],
+    actors: list[ActorPartition],
     min_area: int,
 ) -> list[tuple[str, np.ndarray, int]]:
     if not np.any(mask):
         return []
     if len(actors) <= 1:
-        actor_id, _, missing = actors[0] if actors else ("actor_001", (0.0, 0.0), 0)
-        return [(actor_id, mask, missing)]
+        if not actors:
+            return [("actor_001", mask, 0)]
+        actor = actors[0]
+        actor_mask = cv2.bitwise_and(mask, actor.mask) if actor.mask is not None else mask
+        actor_mask = _remove_small_components(actor_mask, min_area=min_area)
+        if np.count_nonzero(actor_mask) < min_area:
+            return []
+        return [(actor.actor_id, actor_mask, actor.missing_frames)]
+
+    if all(actor.mask is not None for actor in actors):
+        output: list[tuple[str, np.ndarray, int]] = []
+        claimed = np.zeros(mask.shape, dtype=np.uint8)
+        for actor in actors:
+            assert actor.mask is not None
+            actor_mask = cv2.bitwise_and(mask, actor.mask)
+            actor_mask = cv2.bitwise_and(actor_mask, cv2.bitwise_not(claimed))
+            actor_mask = _remove_small_components(actor_mask, min_area=min_area)
+            if np.count_nonzero(actor_mask) >= min_area:
+                output.append((actor.actor_id, actor_mask, actor.missing_frames))
+                claimed = cv2.bitwise_or(claimed, actor_mask)
+        return output
 
     ys, xs = np.nonzero(mask)
-    anchor_array = np.array([centroid for _, centroid, _ in actors], dtype=np.float32)
+    anchor_array = np.array([actor.centroid for actor in actors], dtype=np.float32)
     distances = ((xs.astype(np.float32)[:, None] - anchor_array[None, :, 0]) ** 2) + (
         (ys.astype(np.float32)[:, None] - anchor_array[None, :, 1]) ** 2
     ) * 0.35
     assignments = np.argmin(distances, axis=1)
 
     output: list[tuple[str, np.ndarray, int]] = []
-    for actor_index, (actor_id, _, missing) in enumerate(actors):
+    for actor_index, actor in enumerate(actors):
         actor_mask = np.zeros(mask.shape, dtype=np.uint8)
         selected = assignments == actor_index
         actor_mask[ys[selected], xs[selected]] = 255
         actor_mask = _remove_small_components(actor_mask, min_area=min_area)
         if np.count_nonzero(actor_mask) >= min_area:
-            output.append((actor_id, actor_mask, missing))
+            output.append((actor.actor_id, actor_mask, actor.missing_frames))
     return output
 
 

@@ -356,6 +356,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Human parser segment manifest JSON path.",
     )
+    auto_costume_parser.add_argument(
+        "--actor-manifest",
+        default=None,
+        help="Optional actor segment manifest. If set, costume proposals are intersected with actor masks.",
+    )
     auto_costume_parser.add_argument("--output-dir", required=True, help="Output segment artifact directory.")
     auto_costume_parser.add_argument(
         "--actor-guide-label",
@@ -575,6 +580,7 @@ def handle_track_segments(args: argparse.Namespace) -> int:
 def handle_auto_costume_track(args: argparse.Namespace) -> int:
     return run_auto_costume_track(
         human_parser_manifest_path=Path(args.human_parser_manifest),
+        actor_manifest_path=Path(args.actor_manifest) if args.actor_manifest else None,
         output_dir=Path(args.output_dir),
         actor_guide_labels=list(args.actor_guide_label),
         clothing_labels=list(args.clothing_label),

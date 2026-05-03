@@ -6,6 +6,7 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+tmp/
 
 # Model weights and generated media
 models/deoldify/*.pth

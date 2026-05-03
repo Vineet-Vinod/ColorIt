@@ -210,13 +210,14 @@ def _stitch_source_tracks(
                 best_score = score
                 best_actor = actor
         if best_actor is None or best_score < 0.0:
+            if len(source_track.instances) < min_source_frames:
+                continue
             actor_id = f"actor_{next_actor_number:03d}"
             next_actor_number += 1
             best_actor = StableActor(actor_id=actor_id)
             stable_actors.append(best_actor)
-        if len(source_track.instances) >= min_source_frames or not best_actor.source_track_ids:
-            best_actor.source_track_ids.append(source_track.source_track_id)
-            best_actor.instances.extend(source_track.instances)
+        best_actor.source_track_ids.append(source_track.source_track_id)
+        best_actor.instances.extend(source_track.instances)
 
     for actor in stable_actors:
         actor.instances.sort(key=lambda instance: (instance.frame_index, instance.confidence), reverse=False)

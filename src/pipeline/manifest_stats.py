@@ -106,8 +106,11 @@ def _load_palette(path: Path | None) -> dict[str, str]:
             raise ValueError(f"Palette aliases must be an object: {path}")
         for alias_track_id, target_track_id in aliases.items():
             target_color = palette.get(str(target_track_id))
-            if target_color is not None:
-                palette[str(alias_track_id)] = target_color
+            if target_color is None:
+                raise ValueError(
+                    f"Palette alias {alias_track_id} references unknown palette track {target_track_id}."
+                )
+            palette[str(alias_track_id)] = target_color
     return palette
 
 

@@ -102,6 +102,7 @@ def run_auto_costume_track(
         if actor_manifest is not None
         else {}
     )
+    frame_gray_reader = _FrameGrayReader(Path(str(manifest["source_clip"])), width=width, height=height)
 
     active_actors: dict[str, ActiveActor] = {}
     active_actor_partitions: dict[str, ActorPartition] = {}
@@ -111,6 +112,7 @@ def run_auto_costume_track(
 
     for frame_payload in manifest["frames"]:
         frame_index = int(frame_payload["frame_index"])
+        frame_gray = frame_gray_reader.read(frame_index) if actor_manifest_path is not None else None
         masks_by_label = _load_masks_by_label(
             frame_payload=frame_payload,
             manifest_path=human_parser_manifest_path,
@@ -133,7 +135,10 @@ def run_auto_costume_track(
                 current_partitions=actor_partitions,
                 active_partitions=active_actor_partitions,
                 actor_max_missing=actor_max_missing,
+                previous_gray=frame_gray_reader.previous_gray,
+                current_gray=frame_gray,
             )
+            frame_gray_reader.mark_consumed(frame_gray)
         else:
             guide_mask = _combine_masks(masks_by_label, actor_guide_label_set, height=height, width=width)
             guide_anchors = _guide_anchors(
@@ -172,6 +177,7 @@ def run_auto_costume_track(
                 actors=actor_partitions,
                 min_area=min_mask_area,
                 actor_prior_dilate_px=actor_prior_dilate_px,
+                allow_unscoped_fallback=actor_manifest_path is None,
             ):
                 area = int(np.count_nonzero(actor_mask))
                 confidence = _candidate_confidence(
@@ -245,6 +251,42 @@ def run_auto_costume_track(
     return 0
 
 
+class _FrameGrayReader:
+    def __init__(self, source_clip: Path, *, width: int, height: int) -> None:
+        self.source_clip = source_clip.expanduser().resolve()
+        self.width = width
+        self.height = height
+        self.capture: cv2.VideoCapture | None = None
+        self.next_frame_index = 0
+        self.previous_gray: np.ndarray | None = None
+        if self.source_clip.exists():
+            capture = cv2.VideoCapture(str(self.source_clip))
+            if capture.isOpened():
+                self.capture = capture
+
+    def read(self, frame_index: int) -> np.ndarray | None:
+        if self.capture is None:
+            return None
+        frame_bgr: np.ndarray | None = None
+        while self.next_frame_index <= frame_index:
+            ok, payload = self.capture.read()
+            if not ok:
+                self.capture.release()
+                self.capture = None
+                return None
+            frame_bgr = payload
+            self.next_frame_index += 1
+        if frame_bgr is None:
+            return None
+        if frame_bgr.shape[:2] != (self.height, self.width):
+            frame_bgr = cv2.resize(frame_bgr, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
+        return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+
+    def mark_consumed(self, frame_gray: np.ndarray | None) -> None:
+        if frame_gray is not None:
+            self.previous_gray = frame_gray
+
+
 def _load_masks_by_label(
     *,
     frame_payload: dict,
@@ -315,6 +357,8 @@ def _carry_actor_partitions(
     current_partitions: list[ActorPartition],
     active_partitions: dict[str, ActorPartition],
     actor_max_missing: int,
+    previous_gray: np.ndarray | None,
+    current_gray: np.ndarray | None,
 ) -> list[ActorPartition]:
     current_ids = {partition.actor_id for partition in current_partitions}
     for partition in current_partitions:
@@ -329,10 +373,18 @@ def _carry_actor_partitions(
         if missing_frames > actor_max_missing:
             stale_actor_ids.append(actor_id)
             continue
+        carried_mask = _warp_carried_mask(
+            mask=partition.mask,
+            previous_gray=previous_gray,
+            current_gray=current_gray,
+        )
+        if carried_mask is None or np.count_nonzero(carried_mask) < 64:
+            stale_actor_ids.append(actor_id)
+            continue
         carried_partition = ActorPartition(
             actor_id=actor_id,
-            centroid=partition.centroid,
-            mask=partition.mask,
+            centroid=_mask_centroid(carried_mask, fallback=partition.centroid),
+            mask=carried_mask,
             missing_frames=missing_frames,
         )
         active_partitions[actor_id] = carried_partition
@@ -342,6 +394,48 @@ def _carry_actor_partitions(
         active_partitions.pop(actor_id, None)
 
     return sorted(carried_partitions, key=lambda partition: partition.centroid[0])
+
+
+def _warp_carried_mask(
+    *,
+    mask: np.ndarray | None,
+    previous_gray: np.ndarray | None,
+    current_gray: np.ndarray | None,
+) -> np.ndarray | None:
+    if mask is None:
+        return None
+    if previous_gray is None or current_gray is None:
+        return mask
+    current_to_previous_flow = cv2.calcOpticalFlowFarneback(
+        current_gray,
+        previous_gray,
+        None,
+        0.5,
+        3,
+        21,
+        3,
+        5,
+        1.2,
+        0,
+    )
+    height, width = current_gray.shape[:2]
+    grid_x, grid_y = np.meshgrid(np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32))
+    warped = cv2.remap(
+        mask,
+        grid_x + current_to_previous_flow[:, :, 0],
+        grid_y + current_to_previous_flow[:, :, 1],
+        interpolation=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+    return np.where(warped > 0, 255, 0).astype(np.uint8)
+
+
+def _mask_centroid(mask: np.ndarray, *, fallback: tuple[float, float]) -> tuple[float, float]:
+    moments = cv2.moments(mask, binaryImage=True)
+    if moments["m00"] == 0:
+        return fallback
+    return (float(moments["m10"] / moments["m00"]), float(moments["m01"] / moments["m00"]))
 
 
 def _guide_anchors(
@@ -441,11 +535,14 @@ def _split_by_actors(
     actors: list[ActorPartition],
     min_area: int,
     actor_prior_dilate_px: int,
+    allow_unscoped_fallback: bool,
 ) -> list[tuple[str, np.ndarray, int]]:
     if not np.any(mask):
         return []
     if len(actors) <= 1:
         if not actors:
+            if not allow_unscoped_fallback:
+                return []
             return [("actor_001", mask, 0)]
         actor = actors[0]
         gate_mask = _actor_gate_mask(actor.mask, actor_prior_dilate_px) if actor.mask is not None else None

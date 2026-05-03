@@ -403,7 +403,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stitch_actor_parser.add_argument("--actor-manifest", required=True, help="Source actor segment manifest.")
     stitch_actor_parser.add_argument("--output-dir", required=True, help="Output stitched actor directory.")
-    stitch_actor_parser.add_argument("--min-source-frames", type=int, default=2)
+    stitch_actor_parser.add_argument("--min-source-frames", type=int, default=5)
     stitch_actor_parser.add_argument("--max-gap-frames", type=int, default=35)
     stitch_actor_parser.add_argument("--max-centroid-distance", type=float, default=360.0)
     stitch_actor_parser.add_argument("--min-iou", type=float, default=0.02)

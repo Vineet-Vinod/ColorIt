@@ -452,6 +452,17 @@ def _load_palette_manifest(path: Path | None) -> dict[str, str]:
             raise ValueError(f"Palette color for {track_id} must be a #RRGGBB string.")
         _hex_to_rgb(color_hex)
         palette[str(track_id)] = color_hex
+    aliases = payload.get("aliases", {})
+    if aliases:
+        if not isinstance(aliases, dict):
+            raise ValueError(f"Palette aliases must be a JSON object: {path}")
+        for alias_track_id, target_track_id in aliases.items():
+            target_color = palette.get(str(target_track_id))
+            if target_color is None:
+                raise ValueError(
+                    f"Palette alias {alias_track_id} references unknown palette track {target_track_id}."
+                )
+            palette[str(alias_track_id)] = target_color
     return palette
 
 

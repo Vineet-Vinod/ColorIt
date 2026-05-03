@@ -99,7 +99,16 @@ def _load_palette(path: Path | None) -> dict[str, str]:
     tracks = payload.get("tracks", payload)
     if not isinstance(tracks, dict):
         raise ValueError(f"Palette manifest tracks must be an object: {path}")
-    return {str(track_id): str(color) for track_id, color in tracks.items()}
+    palette = {str(track_id): str(color) for track_id, color in tracks.items()}
+    aliases = payload.get("aliases", {})
+    if aliases:
+        if not isinstance(aliases, dict):
+            raise ValueError(f"Palette aliases must be an object: {path}")
+        for alias_track_id, target_track_id in aliases.items():
+            target_color = palette.get(str(target_track_id))
+            if target_color is not None:
+                palette[str(alias_track_id)] = target_color
+    return palette
 
 
 def _max_missing_span(frames: list[int]) -> int:

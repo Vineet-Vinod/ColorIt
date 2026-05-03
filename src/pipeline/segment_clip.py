@@ -5,6 +5,7 @@ from pathlib import Path
 from src.pipeline.segment_backends import (
     DEFAULT_HUMAN_PARSER_MODEL_ID,
     run_human_parser_segmentation,
+    run_person_maskrcnn_segmentation,
     run_polygon_segmentation,
 )
 
@@ -17,6 +18,12 @@ def run_segment_clip(
     tracks_path: Path | None,
     model_id: str | None,
     device: str,
+    score_threshold: float,
+    mask_threshold: float,
+    min_area: int,
+    iou_threshold: float,
+    max_center_distance: float,
+    max_missing_frames: int,
     overwrite: bool,
 ) -> int:
     backend = backend.lower()
@@ -35,6 +42,19 @@ def run_segment_clip(
             output_dir=output_dir,
             model_id=model_id or DEFAULT_HUMAN_PARSER_MODEL_ID,
             device=device,
+            overwrite=overwrite,
+        )
+    elif backend == "person-maskrcnn":
+        manifest = run_person_maskrcnn_segmentation(
+            input_path=input_path,
+            output_dir=output_dir,
+            device=device,
+            score_threshold=score_threshold,
+            mask_threshold=mask_threshold,
+            min_area=min_area,
+            iou_threshold=iou_threshold,
+            max_center_distance=max_center_distance,
+            max_missing_frames=max_missing_frames,
             overwrite=overwrite,
         )
     else:

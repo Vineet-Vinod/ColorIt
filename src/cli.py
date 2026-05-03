@@ -114,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     segment_parser.add_argument(
         "--backend",
         default="polygon",
-        choices=("polygon", "human-parser"),
+        choices=("polygon", "human-parser", "person-maskrcnn"),
         help="Segmentation backend to run.",
     )
     segment_parser.add_argument("--output-dir", required=True, help="Segment artifact directory.")
@@ -134,6 +134,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("auto", "cpu", "mps"),
         help="Model device for model-backed segmentation backends.",
     )
+    segment_parser.add_argument("--score-threshold", type=float, default=0.70)
+    segment_parser.add_argument("--mask-threshold", type=float, default=0.50)
+    segment_parser.add_argument("--min-area", type=int, default=3000)
+    segment_parser.add_argument("--iou-threshold", type=float, default=0.10)
+    segment_parser.add_argument("--max-center-distance", type=float, default=260.0)
+    segment_parser.add_argument("--max-missing-frames", type=int, default=8)
     segment_parser.add_argument("--overwrite", action="store_true")
     segment_parser.set_defaults(handler=handle_segment_clip)
 
@@ -472,6 +478,12 @@ def handle_segment_clip(args: argparse.Namespace) -> int:
         tracks_path=Path(args.tracks) if args.tracks else None,
         model_id=args.model_id,
         device=str(args.device),
+        score_threshold=float(args.score_threshold),
+        mask_threshold=float(args.mask_threshold),
+        min_area=int(args.min_area),
+        iou_threshold=float(args.iou_threshold),
+        max_center_distance=float(args.max_center_distance),
+        max_missing_frames=int(args.max_missing_frames),
         overwrite=bool(args.overwrite),
     )
 

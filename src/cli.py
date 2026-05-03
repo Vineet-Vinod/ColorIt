@@ -9,6 +9,7 @@ from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import load_config
 from src.pipeline.ffmpeg_utils import compress_video
 from src.pipeline.inference import colorize_image_file
+from src.pipeline.manifest_stats import run_manifest_stats
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.movie import run_colorize_movie
 from src.pipeline.segment_clip import run_segment_clip
@@ -409,6 +410,15 @@ def build_parser() -> argparse.ArgumentParser:
     stitch_actor_parser.add_argument("--overwrite", action="store_true")
     stitch_actor_parser.set_defaults(handler=handle_stitch_actors)
 
+    manifest_stats_parser = subparsers.add_parser(
+        "manifest-stats",
+        help="Summarize segment manifest coverage and palette validation.",
+    )
+    manifest_stats_parser.add_argument("--segment-manifest", required=True)
+    manifest_stats_parser.add_argument("--palette-manifest", default=None)
+    manifest_stats_parser.add_argument("--output", default=None)
+    manifest_stats_parser.set_defaults(handler=handle_manifest_stats)
+
     return parser
 
 
@@ -626,6 +636,14 @@ def handle_stitch_actors(args: argparse.Namespace) -> int:
         overlap_merge_iou=float(args.overlap_merge_iou),
         allow_overlap_frames=int(args.allow_overlap_frames),
         overwrite=bool(args.overwrite),
+    )
+
+
+def handle_manifest_stats(args: argparse.Namespace) -> int:
+    return run_manifest_stats(
+        segment_manifest_path=Path(args.segment_manifest),
+        palette_manifest_path=Path(args.palette_manifest) if args.palette_manifest else None,
+        output_path=Path(args.output) if args.output else None,
     )
 
 

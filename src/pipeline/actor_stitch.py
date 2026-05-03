@@ -76,6 +76,7 @@ def run_stitch_actors(
     max_gap_frames: int,
     max_centroid_distance: float,
     min_iou: float,
+    overlap_merge_iou: float,
     allow_overlap_frames: int,
     overwrite: bool,
 ) -> int:
@@ -97,6 +98,7 @@ def run_stitch_actors(
         max_gap_frames=max_gap_frames,
         max_centroid_distance=max_centroid_distance,
         min_iou=min_iou,
+        overlap_merge_iou=overlap_merge_iou,
         allow_overlap_frames=allow_overlap_frames,
     )
 
@@ -143,6 +145,7 @@ def run_stitch_actors(
             "max_gap_frames": max_gap_frames,
             "max_centroid_distance": max_centroid_distance,
             "min_iou": min_iou,
+            "overlap_merge_iou": overlap_merge_iou,
             "allow_overlap_frames": allow_overlap_frames,
         },
     )
@@ -185,6 +188,7 @@ def _stitch_source_tracks(
     max_gap_frames: int,
     max_centroid_distance: float,
     min_iou: float,
+    overlap_merge_iou: float,
     allow_overlap_frames: int,
 ) -> list[StableActor]:
     stable_actors: list[StableActor] = []
@@ -199,6 +203,7 @@ def _stitch_source_tracks(
                 max_gap_frames=max_gap_frames,
                 max_centroid_distance=max_centroid_distance,
                 min_iou=min_iou,
+                overlap_merge_iou=overlap_merge_iou,
                 allow_overlap_frames=allow_overlap_frames,
             )
             if score > best_score:
@@ -226,13 +231,21 @@ def _stitch_score(
     max_gap_frames: int,
     max_centroid_distance: float,
     min_iou: float,
+    overlap_merge_iou: float,
     allow_overlap_frames: int,
 ) -> float:
     actor_frames = {instance.frame_index for instance in actor.instances}
     source_frames = {instance.frame_index for instance in source_track.instances}
     overlap = len(actor_frames & source_frames)
     if overlap > allow_overlap_frames:
-        return -1.0
+        overlap_iou = _mean_overlap_iou(actor.instances, source_track.instances)
+        if overlap_iou < overlap_merge_iou:
+            return -1.0
+        distance = _mean_overlap_distance(actor.instances, source_track.instances)
+        if distance > max_centroid_distance:
+            return -1.0
+        distance_score = 1.0 - min(distance / max(max_centroid_distance, 1.0), 1.0)
+        return 0.65 * overlap_iou + 0.35 * distance_score
 
     if source_track.first_frame >= actor.last_frame:
         anchor_left = _nearest_instance(actor.instances, source_track.first_frame, before=True)
@@ -368,6 +381,31 @@ def _nearest_nonoverlap_instance(left: list[SourceInstance], right: list[SourceI
     right_frames = {instance.frame_index for instance in right}
     candidates = [instance for instance in left if instance.frame_index not in right_frames]
     return candidates[-1] if candidates else left[-1]
+
+
+def _mean_overlap_iou(left: list[SourceInstance], right: list[SourceInstance]) -> float:
+    right_by_frame = {instance.frame_index: instance for instance in right}
+    values = [
+        _bbox_iou(instance.bbox, right_by_frame[instance.frame_index].bbox)
+        for instance in left
+        if instance.frame_index in right_by_frame
+    ]
+    return float(np.mean(values)) if values else 0.0
+
+
+def _mean_overlap_distance(left: list[SourceInstance], right: list[SourceInstance]) -> float:
+    right_by_frame = {instance.frame_index: instance for instance in right}
+    values = [
+        float(
+            np.hypot(
+                instance.centroid[0] - right_by_frame[instance.frame_index].centroid[0],
+                instance.centroid[1] - right_by_frame[instance.frame_index].centroid[1],
+            )
+        )
+        for instance in left
+        if instance.frame_index in right_by_frame
+    ]
+    return float(np.mean(values)) if values else float("inf")
 
 
 def _bbox_center(bbox: list[int]) -> tuple[float, float]:

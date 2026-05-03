@@ -404,6 +404,7 @@ def build_parser() -> argparse.ArgumentParser:
     stitch_actor_parser.add_argument("--max-gap-frames", type=int, default=35)
     stitch_actor_parser.add_argument("--max-centroid-distance", type=float, default=360.0)
     stitch_actor_parser.add_argument("--min-iou", type=float, default=0.02)
+    stitch_actor_parser.add_argument("--overlap-merge-iou", type=float, default=0.16)
     stitch_actor_parser.add_argument("--allow-overlap-frames", type=int, default=2)
     stitch_actor_parser.add_argument("--overwrite", action="store_true")
     stitch_actor_parser.set_defaults(handler=handle_stitch_actors)
@@ -622,6 +623,7 @@ def handle_stitch_actors(args: argparse.Namespace) -> int:
         max_gap_frames=int(args.max_gap_frames),
         max_centroid_distance=float(args.max_centroid_distance),
         min_iou=float(args.min_iou),
+        overlap_merge_iou=float(args.overlap_merge_iou),
         allow_overlap_frames=int(args.allow_overlap_frames),
         overwrite=bool(args.overwrite),
     )

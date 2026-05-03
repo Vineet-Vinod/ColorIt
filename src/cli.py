@@ -389,6 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
     auto_costume_parser.add_argument("--actor-max-distance", type=float, default=150.0)
     auto_costume_parser.add_argument("--actor-max-missing", type=int, default=6)
     auto_costume_parser.add_argument("--skin-dilate-px", type=int, default=5)
+    auto_costume_parser.add_argument("--actor-prior-dilate-px", type=int, default=18)
     auto_costume_parser.add_argument("--close-px", type=int, default=3)
     auto_costume_parser.add_argument("--erode-px", type=int, default=1)
     auto_costume_parser.add_argument("--dilate-px", type=int, default=0)
@@ -618,6 +619,7 @@ def handle_auto_costume_track(args: argparse.Namespace) -> int:
         actor_max_distance=float(args.actor_max_distance),
         actor_max_missing=int(args.actor_max_missing),
         skin_dilate_px=int(args.skin_dilate_px),
+        actor_prior_dilate_px=int(args.actor_prior_dilate_px),
         close_px=int(args.close_px),
         erode_px=int(args.erode_px),
         dilate_px=int(args.dilate_px),

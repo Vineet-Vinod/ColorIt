@@ -64,6 +64,7 @@ def run_auto_costume_track(
     actor_max_distance: float,
     actor_max_missing: int,
     skin_dilate_px: int,
+    actor_prior_dilate_px: int,
     close_px: int,
     erode_px: int,
     dilate_px: int,
@@ -169,6 +170,7 @@ def run_auto_costume_track(
                 mask=candidate_mask,
                 actors=actor_partitions,
                 min_area=min_mask_area,
+                actor_prior_dilate_px=actor_prior_dilate_px,
             ):
                 area = int(np.count_nonzero(actor_mask))
                 confidence = _candidate_confidence(
@@ -225,6 +227,7 @@ def run_auto_costume_track(
             "actor_guide_labels": sorted(actor_guide_label_set),
             "clothing_labels": sorted(clothing_label_set),
             "skin_labels": sorted(skin_label_set),
+            "actor_prior_dilate_px": actor_prior_dilate_px,
             "strategy": "actor_guided_human_parser_candidates",
         },
     )
@@ -429,6 +432,7 @@ def _split_by_actors(
     mask: np.ndarray,
     actors: list[ActorPartition],
     min_area: int,
+    actor_prior_dilate_px: int,
 ) -> list[tuple[str, np.ndarray, int]]:
     if not np.any(mask):
         return []
@@ -436,24 +440,20 @@ def _split_by_actors(
         if not actors:
             return [("actor_001", mask, 0)]
         actor = actors[0]
-        actor_mask = cv2.bitwise_and(mask, actor.mask) if actor.mask is not None else mask
+        gate_mask = _actor_gate_mask(actor.mask, actor_prior_dilate_px) if actor.mask is not None else None
+        actor_mask = cv2.bitwise_and(mask, gate_mask) if gate_mask is not None else mask
         actor_mask = _remove_small_components(actor_mask, min_area=min_area)
         if np.count_nonzero(actor_mask) < min_area:
             return []
         return [(actor.actor_id, actor_mask, actor.missing_frames)]
 
     if all(actor.mask is not None for actor in actors):
-        output: list[tuple[str, np.ndarray, int]] = []
-        claimed = np.zeros(mask.shape, dtype=np.uint8)
-        for actor in actors:
-            assert actor.mask is not None
-            actor_mask = cv2.bitwise_and(mask, actor.mask)
-            actor_mask = cv2.bitwise_and(actor_mask, cv2.bitwise_not(claimed))
-            actor_mask = _remove_small_components(actor_mask, min_area=min_area)
-            if np.count_nonzero(actor_mask) >= min_area:
-                output.append((actor.actor_id, actor_mask, actor.missing_frames))
-                claimed = cv2.bitwise_or(claimed, actor_mask)
-        return output
+        return _split_by_actor_mask_priors(
+            mask=mask,
+            actors=actors,
+            min_area=min_area,
+            actor_prior_dilate_px=actor_prior_dilate_px,
+        )
 
     ys, xs = np.nonzero(mask)
     anchor_array = np.array([actor.centroid for actor in actors], dtype=np.float32)
@@ -471,6 +471,51 @@ def _split_by_actors(
         if np.count_nonzero(actor_mask) >= min_area:
             output.append((actor.actor_id, actor_mask, actor.missing_frames))
     return output
+
+
+def _split_by_actor_mask_priors(
+    *,
+    mask: np.ndarray,
+    actors: list[ActorPartition],
+    min_area: int,
+    actor_prior_dilate_px: int,
+) -> list[tuple[str, np.ndarray, int]]:
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return []
+
+    gate_values: list[np.ndarray] = []
+    actor_centroids = np.array([actor.centroid for actor in actors], dtype=np.float32)
+    for actor in actors:
+        assert actor.mask is not None
+        gate_mask = _actor_gate_mask(actor.mask, actor_prior_dilate_px)
+        gate_values.append(gate_mask[ys, xs] > 0)
+    gate_array = np.stack(gate_values, axis=1)
+    inside_any_gate = np.any(gate_array, axis=1)
+    if not np.any(inside_any_gate):
+        return []
+
+    distances = ((xs.astype(np.float32)[:, None] - actor_centroids[None, :, 0]) ** 2) + (
+        (ys.astype(np.float32)[:, None] - actor_centroids[None, :, 1]) ** 2
+    ) * 0.35
+    distances[~gate_array] = np.inf
+    assignments = np.argmin(distances, axis=1)
+
+    output: list[tuple[str, np.ndarray, int]] = []
+    for actor_index, actor in enumerate(actors):
+        actor_mask = np.zeros(mask.shape, dtype=np.uint8)
+        selected = inside_any_gate & (assignments == actor_index)
+        actor_mask[ys[selected], xs[selected]] = 255
+        actor_mask = _remove_small_components(actor_mask, min_area=min_area)
+        if np.count_nonzero(actor_mask) >= min_area:
+            output.append((actor.actor_id, actor_mask, actor.missing_frames))
+    return output
+
+
+def _actor_gate_mask(actor_mask: np.ndarray, actor_prior_dilate_px: int) -> np.ndarray:
+    if actor_prior_dilate_px <= 0:
+        return actor_mask
+    return cv2.dilate(actor_mask, _kernel(actor_prior_dilate_px), iterations=1)
 
 
 def _candidate_confidence(

@@ -59,6 +59,7 @@ def run_auto_costume_track(
     skin_labels: list[str],
     min_mask_area: int,
     min_confidence: float,
+    min_track_frames: int,
     guide_min_area: int,
     guide_merge_distance: float,
     actor_max_distance: float,
@@ -212,6 +213,12 @@ def run_auto_costume_track(
                 stats.anchors.append((confidence, area, frame_index))
         output_frames.append(SegmentFrame(frame_index=frame_index, instances=instances))
 
+    if min_track_frames > 1:
+        output_frames, track_stats = _filter_short_tracks(
+            output_frames=output_frames,
+            track_stats=track_stats,
+            min_track_frames=min_track_frames,
+        )
     output_tracks = _build_tracks(track_stats)
     manifest_out = SegmentManifest(
         source_clip=str(manifest["source_clip"]),
@@ -228,6 +235,7 @@ def run_auto_costume_track(
             "clothing_labels": sorted(clothing_label_set),
             "skin_labels": sorted(skin_label_set),
             "actor_prior_dilate_px": actor_prior_dilate_px,
+            "min_track_frames": min_track_frames,
             "strategy": "actor_guided_human_parser_candidates",
         },
     )
@@ -588,6 +596,36 @@ def _build_tracks(track_stats: dict[str, TrackStats]) -> dict[str, SegmentTrack]
             },
         )
     return tracks
+
+
+def _filter_short_tracks(
+    *,
+    output_frames: list[SegmentFrame],
+    track_stats: dict[str, TrackStats],
+    min_track_frames: int,
+) -> tuple[list[SegmentFrame], dict[str, TrackStats]]:
+    kept_track_ids = {
+        track_id
+        for track_id, stats in track_stats.items()
+        if stats.frame_count >= min_track_frames
+    }
+    filtered_frames = [
+        SegmentFrame(
+            frame_index=frame.frame_index,
+            instances=[
+                instance
+                for instance in frame.instances
+                if instance.track_id in kept_track_ids
+            ],
+        )
+        for frame in output_frames
+    ]
+    filtered_stats = {
+        track_id: stats
+        for track_id, stats in track_stats.items()
+        if track_id in kept_track_ids
+    }
+    return filtered_frames, filtered_stats
 
 
 def _slug(value: str) -> str:

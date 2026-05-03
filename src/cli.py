@@ -384,6 +384,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     auto_costume_parser.add_argument("--min-mask-area", type=int, default=800)
     auto_costume_parser.add_argument("--min-confidence", type=float, default=0.18)
+    auto_costume_parser.add_argument("--min-track-frames", type=int, default=2)
     auto_costume_parser.add_argument("--guide-min-area", type=int, default=120)
     auto_costume_parser.add_argument("--guide-merge-distance", type=float, default=95.0)
     auto_costume_parser.add_argument("--actor-max-distance", type=float, default=150.0)
@@ -614,6 +615,7 @@ def handle_auto_costume_track(args: argparse.Namespace) -> int:
         skin_labels=list(args.skin_label),
         min_mask_area=int(args.min_mask_area),
         min_confidence=float(args.min_confidence),
+        min_track_frames=int(args.min_track_frames),
         guide_min_area=int(args.guide_min_area),
         guide_merge_distance=float(args.guide_merge_distance),
         actor_max_distance=float(args.actor_max_distance),

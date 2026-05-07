@@ -15,6 +15,10 @@ def run_model_chroma_propagate(
     output_path: Path,
     keyframe_stride: int,
     chroma_blend: float,
+    fallback_color_hex: str | None,
+    fallback_strength: float,
+    disagreement_start: float,
+    disagreement_end: float,
     overwrite: bool,
 ) -> int:
     source_path = source_path.expanduser().resolve()
@@ -26,6 +30,7 @@ def run_model_chroma_propagate(
         raise FileNotFoundError(f"Model color clip not found: {model_color_path}")
     if output_path.exists() and not overwrite:
         raise FileExistsError(f"Output already exists: {output_path}. Use --overwrite to replace it.")
+    fallback_ab = _hex_to_lab_ab(fallback_color_hex) if fallback_color_hex else None
 
     source_info = ffprobe_media(source_path)
     model_info = ffprobe_media(model_color_path)
@@ -50,6 +55,10 @@ def run_model_chroma_propagate(
         model_frames=model_frames,
         keyframe_indices=keyframe_indices,
         chroma_blend=chroma_blend,
+        fallback_ab=fallback_ab,
+        fallback_strength=fallback_strength,
+        disagreement_start=disagreement_start,
+        disagreement_end=disagreement_end,
     )
     _write_frames(
         output_path=output_path,
@@ -71,6 +80,10 @@ def _propagate_chroma(
     model_frames: list[np.ndarray],
     keyframe_indices: list[int],
     chroma_blend: float,
+    fallback_ab: np.ndarray | None,
+    fallback_strength: float,
+    disagreement_start: float,
+    disagreement_end: float,
 ) -> list[np.ndarray]:
     source_gray = [cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY) for frame in source_frames]
     source_l = [cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)[:, :, :1].astype(np.float32) for frame in source_frames]
@@ -104,13 +117,39 @@ def _propagate_chroma(
             propagated_ab = model_ab_by_key[left_key]
         else:
             t = (frame_index - left_key) / max(right_key - left_key, 1)
-            propagated_ab = (1.0 - t) * forward_ab[frame_index] + t * backward_ab[frame_index]
+            forward = forward_ab[frame_index]
+            backward = backward_ab[frame_index]
+            propagated_ab = (1.0 - t) * forward + t * backward
+            if fallback_ab is not None and fallback_strength > 0.0:
+                disagreement = np.linalg.norm(forward - backward, axis=2)
+                uncertainty = _smoothstep(disagreement_start, disagreement_end, disagreement)
+                uncertainty = cv2.GaussianBlur(uncertainty.astype(np.float32), (0, 0), 2.0)
+                fallback_mix = np.clip(uncertainty * fallback_strength, 0.0, 1.0)[:, :, None]
+                propagated_ab = (1.0 - fallback_mix) * propagated_ab + fallback_mix * fallback_ab
         deoldify_ab = cv2.cvtColor(source_frames[frame_index], cv2.COLOR_RGB2LAB)[:, :, 1:3].astype(np.float32)
         output_ab = (1.0 - blend) * deoldify_ab + blend * propagated_ab
         output_lab = np.concatenate([source_l[frame_index], output_ab], axis=2)
         output_rgb = cv2.cvtColor(np.clip(output_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
         output_frames.append(output_rgb)
     return output_frames
+
+
+def _smoothstep(edge0: float, edge1: float, value: np.ndarray) -> np.ndarray:
+    value = np.clip((value - edge0) / max(edge1 - edge0, 1e-6), 0.0, 1.0)
+    return value * value * (3.0 - 2.0 * value)
+
+
+def _hex_to_lab_ab(value: str | None) -> np.ndarray:
+    if value is None:
+        raise ValueError("Expected a #RRGGBB fallback color.")
+    value = value.strip()
+    if value.startswith("#"):
+        value = value[1:]
+    if len(value) != 6:
+        raise ValueError(f"Expected #RRGGBB fallback color, got: {value}")
+    rgb = np.array([[[int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)]]], dtype=np.uint8)
+    lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB).astype(np.float32)[0, 0]
+    return lab[1:3]
 
 
 def _warp_ab(*, previous_ab: np.ndarray, previous_gray: np.ndarray, current_gray: np.ndarray) -> np.ndarray:

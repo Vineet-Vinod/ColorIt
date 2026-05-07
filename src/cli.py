@@ -110,6 +110,14 @@ def build_parser() -> argparse.ArgumentParser:
     chroma_propagate_parser.add_argument("--output", required=True)
     chroma_propagate_parser.add_argument("--keyframe-stride", type=int, default=35)
     chroma_propagate_parser.add_argument("--chroma-blend", type=float, default=0.80)
+    chroma_propagate_parser.add_argument(
+        "--fallback-color",
+        default=None,
+        help="Optional #RRGGBB chroma to use where forward/backward propagation disagrees.",
+    )
+    chroma_propagate_parser.add_argument("--fallback-strength", type=float, default=0.85)
+    chroma_propagate_parser.add_argument("--disagreement-start", type=float, default=12.0)
+    chroma_propagate_parser.add_argument("--disagreement-end", type=float, default=34.0)
     chroma_propagate_parser.add_argument("--overwrite", action="store_true")
     chroma_propagate_parser.set_defaults(handler=handle_model_chroma_propagate)
 
@@ -545,6 +553,10 @@ def handle_model_chroma_propagate(args: argparse.Namespace) -> int:
         output_path=Path(args.output),
         keyframe_stride=int(args.keyframe_stride),
         chroma_blend=float(args.chroma_blend),
+        fallback_color_hex=str(args.fallback_color) if args.fallback_color else None,
+        fallback_strength=float(args.fallback_strength),
+        disagreement_start=float(args.disagreement_start),
+        disagreement_end=float(args.disagreement_end),
         overwrite=bool(args.overwrite),
     )
 

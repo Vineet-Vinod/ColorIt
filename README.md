@@ -25,12 +25,6 @@ Colorize a movie:
 uv run colorit /path/to/movie.mp4 --overwrite
 ```
 
-The explicit form is equivalent:
-
-```bash
-uv run colorit run /path/to/movie.mp4 --overwrite
-```
-
 By default this writes `/path/to/movie_color.mp4`. The output is compressed as
 part of the run, with retries at higher CRF values if the result exceeds the
 configured `2x` source-size target.
@@ -38,7 +32,7 @@ configured `2x` source-size target.
 Useful production flags:
 
 ```bash
-uv run colorit run /path/to/movie.mp4 \
+uv run colorit /path/to/movie.mp4 \
   --output /path/to/movie_color.mp4 \
   --resume \
   --overwrite
@@ -64,4 +58,4 @@ Important defaults:
 
 Most older segmentation and costume-track commands are still available for
 research, but they are intentionally hidden from the default help output. The
-default user-facing path should stay `colorit run <movie>`.
+default user-facing path should stay `colorit <movie>`.

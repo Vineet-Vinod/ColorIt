@@ -30,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{download-weights,run,colorize-movie}",
+        metavar="{download-weights,colorize-movie}",
     )
 
     download_parser = subparsers.add_parser(
@@ -42,28 +42,29 @@ def build_parser() -> argparse.ArgumentParser:
     download_parser.add_argument("--force", action="store_true")
     download_parser.set_defaults(handler=handle_download_weights)
 
-    run_parser = subparsers.add_parser(
-        "run",
-        help="Colorize and compress a full movie with production defaults.",
+    default_movie_parser = subparsers.add_parser(
+        "__movie",
+        prog="colorit",
+        help=argparse.SUPPRESS,
     )
-    run_parser.add_argument("movie", help="Input movie path.")
-    run_parser.add_argument(
+    default_movie_parser.add_argument("movie", help="Input movie path.")
+    default_movie_parser.add_argument(
         "--output",
         default=None,
         help="Optional final output path. Defaults to the input path with '_color' appended.",
     )
-    run_parser.add_argument(
+    default_movie_parser.add_argument(
         "--resume",
         action="store_true",
         help="Resume a previous run if intermediate manifests are still present.",
     )
-    run_parser.add_argument(
+    default_movie_parser.add_argument(
         "--keep-intermediates",
         action="store_true",
         help="Keep scene clips and manifests for inspection after a successful run.",
     )
-    run_parser.add_argument("--overwrite", action="store_true")
-    run_parser.set_defaults(handler=handle_run_movie)
+    default_movie_parser.add_argument("--overwrite", action="store_true")
+    default_movie_parser.set_defaults(handler=handle_default_movie)
 
     frame_parser = subparsers.add_parser(
         "colorize-frame",
@@ -453,7 +454,7 @@ def build_parser() -> argparse.ArgumentParser:
     manifest_stats_parser.add_argument("--output", default=None)
     manifest_stats_parser.set_defaults(handler=handle_manifest_stats)
 
-    visible_commands = {"download-weights", "run", "colorize-movie"}
+    visible_commands = {"download-weights", "colorize-movie"}
     subparsers._choices_actions = [
         action for action in subparsers._choices_actions if action.dest in visible_commands
     ]
@@ -498,7 +499,7 @@ def handle_colorize_clip(args: argparse.Namespace) -> int:
     )
 
 
-def handle_run_movie(args: argparse.Namespace) -> int:
+def handle_default_movie(args: argparse.Namespace) -> int:
     config_path = Path("configs/full_movie.yaml")
     config = load_config(config_path)
     return run_colorize_movie(
@@ -707,8 +708,10 @@ def handle_manifest_stats(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args_list = list(sys.argv[1:] if argv is None else argv)
+    if args_list and args_list[0] == "run":
+        parser.error("invalid command: 'run'. Use `colorit <movie>` for the default pipeline.")
     if args_list and _looks_like_movie_path(args_list[0]):
-        args_list.insert(0, "run")
+        args_list.insert(0, "__movie")
     args = parser.parse_args(args_list)
     return int(args.handler(args))
 
@@ -716,9 +719,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _looks_like_movie_path(value: str) -> bool:
     if value.startswith("-"):
         return False
-    return value not in {
+    if value in {
         "download-weights",
-        "run",
         "colorize-frame",
         "colorize-clip",
         "colorize-movie",
@@ -731,7 +733,21 @@ def _looks_like_movie_path(value: str) -> bool:
         "auto-costume-track",
         "stitch-actors",
         "manifest-stats",
+    }:
+        return False
+
+    expanded = Path(value).expanduser()
+    video_suffixes = {
+        ".avi",
+        ".m4v",
+        ".mkv",
+        ".mov",
+        ".mp4",
+        ".mpeg",
+        ".mpg",
+        ".webm",
     }
+    return expanded.exists() or expanded.suffix.lower() in video_suffixes or "/" in value
 
 
 if __name__ == "__main__":

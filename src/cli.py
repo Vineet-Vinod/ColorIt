@@ -9,10 +9,12 @@ from src.pipeline.actor_stitch import run_stitch_actors
 from src.pipeline.auto_costume_track import run_auto_costume_track
 from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import load_config
+from src.pipeline.ddcolor_clip import run_ddcolor_clip
 from src.pipeline.ffmpeg_utils import compress_video
 from src.pipeline.inference import colorize_image_file
 from src.pipeline.manifest_stats import run_manifest_stats
 from src.pipeline.model_loader import load_colorizer_bundle
+from src.pipeline.model_chroma_propagate import run_model_chroma_propagate
 from src.pipeline.movie import run_colorize_movie
 from src.pipeline.segment_clip import run_segment_clip
 from src.pipeline.segment_debug import run_render_segment_debug
@@ -85,6 +87,31 @@ def build_parser() -> argparse.ArgumentParser:
     clip_parser.add_argument("--output", required=True)
     clip_parser.add_argument("--overwrite", action="store_true")
     clip_parser.set_defaults(handler=handle_colorize_clip)
+
+    ddcolor_parser = subparsers.add_parser(
+        "ddcolor-clip",
+        help=argparse.SUPPRESS,
+    )
+    ddcolor_parser.add_argument("--input", required=True)
+    ddcolor_parser.add_argument("--output", required=True)
+    ddcolor_parser.add_argument("--ddcolor-repo", required=True)
+    ddcolor_parser.add_argument("--weights", required=True)
+    ddcolor_parser.add_argument("--input-size", type=int, default=512)
+    ddcolor_parser.add_argument("--device", default="auto", choices=("auto", "cpu", "mps", "cuda"))
+    ddcolor_parser.add_argument("--overwrite", action="store_true")
+    ddcolor_parser.set_defaults(handler=handle_ddcolor_clip)
+
+    chroma_propagate_parser = subparsers.add_parser(
+        "model-chroma-propagate",
+        help=argparse.SUPPRESS,
+    )
+    chroma_propagate_parser.add_argument("--source", required=True, help="Base colorized or grayscale source clip.")
+    chroma_propagate_parser.add_argument("--model-color", required=True, help="Model-colorized clip to sample keyframes from.")
+    chroma_propagate_parser.add_argument("--output", required=True)
+    chroma_propagate_parser.add_argument("--keyframe-stride", type=int, default=35)
+    chroma_propagate_parser.add_argument("--chroma-blend", type=float, default=0.80)
+    chroma_propagate_parser.add_argument("--overwrite", action="store_true")
+    chroma_propagate_parser.set_defaults(handler=handle_model_chroma_propagate)
 
     movie_parser = subparsers.add_parser(
         "colorize-movie",
@@ -499,6 +526,29 @@ def handle_colorize_clip(args: argparse.Namespace) -> int:
     )
 
 
+def handle_ddcolor_clip(args: argparse.Namespace) -> int:
+    return run_ddcolor_clip(
+        input_path=Path(args.input),
+        output_path=Path(args.output),
+        ddcolor_repo_path=Path(args.ddcolor_repo),
+        weights_path=Path(args.weights),
+        input_size=int(args.input_size),
+        device=str(args.device),
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_model_chroma_propagate(args: argparse.Namespace) -> int:
+    return run_model_chroma_propagate(
+        source_path=Path(args.source),
+        model_color_path=Path(args.model_color),
+        output_path=Path(args.output),
+        keyframe_stride=int(args.keyframe_stride),
+        chroma_blend=float(args.chroma_blend),
+        overwrite=bool(args.overwrite),
+    )
+
+
 def handle_default_movie(args: argparse.Namespace) -> int:
     config_path = Path("configs/full_movie.yaml")
     config = load_config(config_path)
@@ -723,6 +773,8 @@ def _looks_like_movie_path(value: str) -> bool:
         "download-weights",
         "colorize-frame",
         "colorize-clip",
+        "ddcolor-clip",
+        "model-chroma-propagate",
         "colorize-movie",
         "compress-video",
         "segment-clip",

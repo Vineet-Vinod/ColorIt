@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
+from collections.abc import Sequence
 
 from src.pipeline.actor_stitch import run_stitch_actors
 from src.pipeline.auto_costume_track import run_auto_costume_track
@@ -21,8 +23,15 @@ from src.pipeline.weights import run_download_weights
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="colorit", description="DeOldify movie colorization CLI")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(
+        prog="colorit",
+        description="Automatic movie colorization. Pass a movie path and ColorIt handles scenes, colorization, assembly, compression, and cleanup.",
+    )
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=True,
+        metavar="{download-weights,run,colorize-movie}",
+    )
 
     download_parser = subparsers.add_parser(
         "download-weights",
@@ -33,9 +42,32 @@ def build_parser() -> argparse.ArgumentParser:
     download_parser.add_argument("--force", action="store_true")
     download_parser.set_defaults(handler=handle_download_weights)
 
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Colorize and compress a full movie with production defaults.",
+    )
+    run_parser.add_argument("movie", help="Input movie path.")
+    run_parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional final output path. Defaults to the input path with '_color' appended.",
+    )
+    run_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a previous run if intermediate manifests are still present.",
+    )
+    run_parser.add_argument(
+        "--keep-intermediates",
+        action="store_true",
+        help="Keep scene clips and manifests for inspection after a successful run.",
+    )
+    run_parser.add_argument("--overwrite", action="store_true")
+    run_parser.set_defaults(handler=handle_run_movie)
+
     frame_parser = subparsers.add_parser(
         "colorize-frame",
-        help="Colorize a single image.",
+        help=argparse.SUPPRESS,
     )
     frame_parser.add_argument("--config", default="configs/default.yaml")
     frame_parser.add_argument("--input", required=True)
@@ -45,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     clip_parser = subparsers.add_parser(
         "colorize-clip",
-        help="Colorize a single clip and preserve audio.",
+        help=argparse.SUPPRESS,
     )
     clip_parser.add_argument("--config", default="configs/default.yaml")
     clip_parser.add_argument("--input", required=True)
@@ -55,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     movie_parser = subparsers.add_parser(
         "colorize-movie",
-        help="Split a movie into scenes, colorize each scene, and reassemble a final movie.",
+        help="Advanced full-movie command with tuning flags.",
     )
     movie_parser.add_argument("--config", default="configs/full_movie.yaml")
     movie_parser.add_argument("--input", required=True, help="Input movie path.")
@@ -91,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     compress_parser = subparsers.add_parser(
         "compress-video",
-        help="Create a compressed derivative of an existing video.",
+        help=argparse.SUPPRESS,
     )
     compress_parser.add_argument("--input", required=True)
     compress_parser.add_argument(
@@ -110,7 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     segment_parser = subparsers.add_parser(
         "segment-clip",
-        help="Generate a reusable segment manifest and masks for a clip.",
+        help=argparse.SUPPRESS,
     )
     segment_parser.add_argument("--input", required=True, help="Input clip path.")
     segment_parser.add_argument(
@@ -147,7 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     segment_debug_parser = subparsers.add_parser(
         "render-segment-debug",
-        help="Render a video overlay for a segment manifest.",
+        help=argparse.SUPPRESS,
     )
     segment_debug_parser.add_argument("--input", required=True, help="Input clip path.")
     segment_debug_parser.add_argument(
@@ -180,7 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     segment_filter_parser = subparsers.add_parser(
         "filter-segments",
-        help="Build a cleaned segment manifest from include and veto labels.",
+        help=argparse.SUPPRESS,
     )
     segment_filter_parser.add_argument(
         "--segment-manifest",
@@ -226,7 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     segment_recolor_parser = subparsers.add_parser(
         "recolor-segments",
-        help="Apply a fixed chroma color inside segment masks of an existing colorized clip.",
+        help=argparse.SUPPRESS,
     )
     segment_recolor_parser.add_argument("--input", required=True, help="Input colorized clip path.")
     segment_recolor_parser.add_argument(
@@ -310,7 +342,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     segment_track_parser = subparsers.add_parser(
         "track-segments",
-        help="Split segment masks into connected components and track them over time.",
+        help=argparse.SUPPRESS,
     )
     segment_track_parser.add_argument(
         "--segment-manifest",
@@ -351,7 +383,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     auto_costume_parser = subparsers.add_parser(
         "auto-costume-track",
-        help="Create actor-scoped costume tracks from parser/SAM-style masks.",
+        help=argparse.SUPPRESS,
     )
     auto_costume_parser.add_argument(
         "--human-parser-manifest",
@@ -399,7 +431,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     stitch_actor_parser = subparsers.add_parser(
         "stitch-actors",
-        help="Merge fragmented actor detections into stable actor tracks.",
+        help=argparse.SUPPRESS,
     )
     stitch_actor_parser.add_argument("--actor-manifest", required=True, help="Source actor segment manifest.")
     stitch_actor_parser.add_argument("--output-dir", required=True, help="Output stitched actor directory.")
@@ -414,12 +446,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     manifest_stats_parser = subparsers.add_parser(
         "manifest-stats",
-        help="Summarize segment manifest coverage and palette validation.",
+        help=argparse.SUPPRESS,
     )
     manifest_stats_parser.add_argument("--segment-manifest", required=True)
     manifest_stats_parser.add_argument("--palette-manifest", default=None)
     manifest_stats_parser.add_argument("--output", default=None)
     manifest_stats_parser.set_defaults(handler=handle_manifest_stats)
+
+    visible_commands = {"download-weights", "run", "colorize-movie"}
+    subparsers._choices_actions = [
+        action for action in subparsers._choices_actions if action.dest in visible_commands
+    ]
 
     return parser
 
@@ -457,6 +494,22 @@ def handle_colorize_clip(args: argparse.Namespace) -> int:
         input_path=Path(args.input),
         output_path=Path(args.output),
         manifest_path=None,
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_run_movie(args: argparse.Namespace) -> int:
+    config_path = Path("configs/full_movie.yaml")
+    config = load_config(config_path)
+    return run_colorize_movie(
+        config=config,
+        config_path=config_path,
+        movie_path=Path(args.movie),
+        output_path=Path(args.output) if args.output else None,
+        scene_threshold=None,
+        keep_intermediates=bool(args.keep_intermediates),
+        resume=bool(args.resume),
+        limit=None,
         overwrite=bool(args.overwrite),
     )
 
@@ -651,10 +704,34 @@ def handle_manifest_stats(args: argparse.Namespace) -> int:
     )
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args()
+    args_list = list(sys.argv[1:] if argv is None else argv)
+    if args_list and _looks_like_movie_path(args_list[0]):
+        args_list.insert(0, "run")
+    args = parser.parse_args(args_list)
     return int(args.handler(args))
+
+
+def _looks_like_movie_path(value: str) -> bool:
+    if value.startswith("-"):
+        return False
+    return value not in {
+        "download-weights",
+        "run",
+        "colorize-frame",
+        "colorize-clip",
+        "colorize-movie",
+        "compress-video",
+        "segment-clip",
+        "render-segment-debug",
+        "filter-segments",
+        "recolor-segments",
+        "track-segments",
+        "auto-costume-track",
+        "stitch-actors",
+        "manifest-stats",
+    }
 
 
 if __name__ == "__main__":

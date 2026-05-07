@@ -36,6 +36,10 @@ class AppConfig:
     def postprocess(self) -> dict[str, Any]:
         return self.raw["postprocess"]
 
+    @property
+    def compression(self) -> dict[str, Any]:
+        return self.raw.get("compression", {})
+
 
 def load_config(path: Path) -> AppConfig:
     if not path.exists():

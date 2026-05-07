@@ -1,183 +1,67 @@
 # ColorIt
 
-Movie-first DeOldify pipeline for black-and-white film colorization.
+Automatic movie-first DeOldify pipeline for black-and-white film colorization.
 
-The repo is centered on one practical path:
+The production path is intentionally small:
 
-- split a movie into scenes
-- colorize each scene with the optimized DeOldify clip pipeline
-- reassemble a final movie next to the source with `_color` appended to the filename
-
-## Commands
-
-- `uv run colorit download-weights`
-- `uv run colorit colorize-frame`
-- `uv run colorit colorize-clip`
-- `uv run colorit compress-video`
-- `uv run colorit colorize-movie`
+- detect scene boundaries
+- colorize each scene with one reused DeOldify model load
+- reassemble the full movie
+- compress the final output with size-aware defaults
+- clean intermediate scene clips and manifests after a successful run
 
 ## Quick Start
 
-Install dependencies and fetch weights:
+Install dependencies and fetch weights once:
 
 ```bash
 uv sync
 uv run colorit download-weights
 ```
 
-Colorize an entire movie:
+Colorize a movie:
 
 ```bash
-uv run colorit colorize-movie \
-  --input /path/to/movie.mp4 \
-  --overwrite
+uv run colorit /path/to/movie.mp4 --overwrite
 ```
 
-By default this writes:
-
-- input: `/path/to/movie.mp4`
-- output: `/path/to/movie_color.mp4`
-
-Create a compressed derivative when you need one:
+The explicit form is equivalent:
 
 ```bash
-uv run colorit compress-video \
-  --input /path/to/movie_color.mp4 \
-  --overwrite
+uv run colorit run /path/to/movie.mp4 --overwrite
 ```
 
-By default this writes `/path/to/movie_color_compressed.mp4`.
+By default this writes `/path/to/movie_color.mp4`. The output is compressed as
+part of the run, with retries at higher CRF values if the result exceeds the
+configured `2x` source-size target.
 
-To keep temporary scene clips and manifests for inspection:
-
-```bash
-uv run colorit colorize-movie \
-  --input /path/to/movie.mp4 \
-  --keep-intermediates \
-  --overwrite
-```
-
-To resume an interrupted movie run from the saved scene and batch manifests:
+Useful production flags:
 
 ```bash
-uv run colorit colorize-movie \
-  --input /path/to/movie.mp4 \
-  --keep-intermediates \
+uv run colorit run /path/to/movie.mp4 \
+  --output /path/to/movie_color.mp4 \
   --resume \
   --overwrite
 ```
 
-## Configs
+Use `--keep-intermediates` only when you need to inspect a failed or suspicious
+run. Normal successful runs delete generated scene clips, colorized scene clips,
+and run manifests automatically.
 
-- `configs/default.yaml`: base config for single-frame and single-clip work
-- `configs/full_movie.yaml`: optimized full-movie pipeline
+## Defaults
 
-The optimized path uses:
+The main pipeline uses `configs/full_movie.yaml`.
 
-- ffmpeg rawvideo piping instead of PNG frame round-trips
-- batched inference on MPS when available, with CPU fallback
-- one model load reused across the whole batch pass
-- scene, batch, and top-level movie manifests for deterministic resume
-- optional scene artifact cleanup after successful assembly
+Important defaults:
 
-## Segmentation Manifests
+- `render_factor: 17`
+- MPS first, CPU fallback
+- rawvideo ffmpeg piping instead of PNG frame round trips
+- scene threshold `0.60`
+- scene clips encoded with H.264 CRF `16`
+- final compression enabled with H.264 CRF `20`, retrying `23`, `26`, and `28`
+- final size target `<= 2x` the source movie
 
-The `segment-clip` command creates reusable per-frame mask manifests for
-downstream experiments such as costume recoloring, actor-only postprocesses, and
-region-specific temporal smoothing.
-
-```bash
-uv run colorit segment-clip \
-  --input data/eval/clips/multiple.mp4 \
-  --backend polygon \
-  --tracks data/eval/tracks/multiple_tracks.json \
-  --output-dir data/segments/multiple \
-  --overwrite
-```
-
-The first backend is `polygon`, a model-free debug backend that interpolates
-track keyframes. It is useful for validating downstream consumers before adding
-model-backed human parsing or video segmentation.
-
-The optional `human-parser` backend uses a sandbox-vetted SegFormer clothing
-parser and emits semantic human-part masks such as `upper_clothes`, `dress`,
-`scarf`, `face`, `hair`, `left_arm`, and `right_arm`.
-
-Install the optional dependencies:
-
-```bash
-uv sync --extra segmentation
-```
-
-Run human parsing:
-
-```bash
-uv run colorit segment-clip \
-  --input data/eval/clips/close_up.mp4 \
-  --backend human-parser \
-  --device cpu \
-  --output-dir data/segments/close_up_human_parser \
-  --overwrite
-```
-
-Segment manifests are written as:
-
-```text
-data/segments/<clip>/
-  segment_manifest.json
-  masks/
-    frame_000000_track_0001.png
-```
-
-Each manifest records clip metadata, backend name, track metadata, frame-local
-instances, mask paths, bounding boxes, labels, and confidence values.
-
-Render a debug overlay for visual review:
-
-```bash
-uv run colorit render-segment-debug \
-  --input data/eval/clips/multiple.mp4 \
-  --segment-manifest data/segments/multiple/segment_manifest.json \
-  --output data/segments/multiple/debug_overlay.mp4 \
-  --include-label clothing \
-  --overwrite
-```
-
-Use `--include-label`, `--include-track`, and `--exclude-label` to focus review
-on specific segment classes or tracks.
-
-For costume-mask review, start with clothing labels only:
-
-```bash
-uv run colorit render-segment-debug \
-  --input data/eval/clips/close_up.mp4 \
-  --segment-manifest data/segments/close_up_human_parser/segment_manifest.json \
-  --output data/segments/close_up_human_parser/clothes_overlay.mp4 \
-  --include-label upper_clothes \
-  --include-label dress \
-  --include-label scarf \
-  --overwrite
-```
-
-Build a cleaned costume-candidate manifest from raw human-parser labels:
-
-```bash
-uv run colorit filter-segments \
-  --segment-manifest data/segments/close_up_human_parser/segment_manifest.json \
-  --output-dir data/segments/close_up_costume_candidates \
-  --include-label upper_clothes \
-  --include-label dress \
-  --include-label scarf \
-  --veto-label face \
-  --veto-label hair \
-  --veto-label left_arm \
-  --veto-label right_arm \
-  --min-area 500 \
-  --close-px 3 \
-  --erode-px 1 \
-  --overwrite
-```
-
-The filtered manifest keeps the same segment-manifest contract and emits a
-single `costume_candidate` track, so downstream color experiments can consume a
-stable label instead of raw model-specific parser labels.
+Most older segmentation and costume-track commands are still available for
+research, but they are intentionally hidden from the default help output. The
+default user-facing path should stay `colorit run <movie>`.

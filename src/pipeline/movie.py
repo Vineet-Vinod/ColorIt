@@ -8,6 +8,7 @@ from typing import Any
 from src.pipeline.assemble import run_assemble_final
 from src.pipeline.batch import run_colorize_batch
 from src.pipeline.config import AppConfig
+from src.pipeline.ffmpeg_utils import compress_video
 from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 from src.pipeline.scenes import load_scene_manifest, run_detect_scenes, scene_manifest_matches
@@ -98,15 +99,40 @@ def run_colorize_movie(
         _mark_movie_stage(movie_run_manifest, stage="batch_colorize", status="succeeded")
         write_json_manifest(movie_run_manifest_path, movie_run_manifest)
 
+        compression_config = config.compression
+        compression_enabled = bool(compression_config.get("enabled", True))
+        assembly_output_path = (
+            paths.final_dir / f"{run_id}_assembly_work{output_path.suffix}"
+            if compression_enabled
+            else output_path
+        )
+
         _mark_movie_stage(movie_run_manifest, stage="assembly", status="running")
         write_json_manifest(movie_run_manifest_path, movie_run_manifest)
         run_assemble_final(
             config=config,
             scene_manifest_path=scene_manifest_path,
-            output_path=output_path,
+            output_path=assembly_output_path,
             limit=limit,
         )
         _mark_movie_stage(movie_run_manifest, stage="assembly", status="succeeded")
+
+        if compression_enabled:
+            _mark_movie_stage(movie_run_manifest, stage="compression", status="running")
+            write_json_manifest(movie_run_manifest_path, movie_run_manifest)
+            compression_result = _compress_final_movie(
+                input_path=assembly_output_path,
+                output_path=output_path,
+                source_movie_path=movie_path,
+                compression_config=compression_config,
+            )
+            _mark_movie_stage(
+                movie_run_manifest,
+                stage="compression",
+                status="succeeded",
+                **compression_result,
+            )
+
         movie_run_manifest["status"] = "succeeded"
         movie_run_manifest["updated_at"] = utc_now_iso()
         movie_run_manifest["completed_at"] = utc_now_iso()
@@ -149,6 +175,7 @@ def _cleanup_movie_artifacts(*, paths, run_id: str) -> None:
     candidates = [
         paths.scene_dir / run_id,
         paths.colorized_dir / "scenes" / run_id,
+        paths.final_dir / f"{run_id}_assembly_work.mp4",
         paths.manifest_dir / f"{run_id}.json",
         paths.manifest_dir / f"movie_run_{run_id}.json",
         paths.manifest_dir / f"full_run_{run_id}.json",
@@ -199,7 +226,63 @@ def _load_movie_run_manifest(
             "scene_detection": {"status": "pending"},
             "batch_colorize": {"status": "pending"},
             "assembly": {"status": "pending"},
+            "compression": {"status": "pending"},
         },
+    }
+
+
+def _compress_final_movie(
+    *,
+    input_path: Path,
+    output_path: Path,
+    source_movie_path: Path,
+    compression_config: dict[str, Any],
+) -> dict[str, Any]:
+    crfs = [int(compression_config.get("crf", 20))]
+    crfs.extend(int(value) for value in compression_config.get("retry_crfs", [23, 26, 28]))
+    crfs = list(dict.fromkeys(crfs))
+
+    source_size_bytes = source_movie_path.stat().st_size
+    max_size_multiplier = float(compression_config.get("max_size_multiplier", 2.0))
+    max_size_bytes = int(source_size_bytes * max_size_multiplier)
+
+    final_size_bytes = 0
+    selected_crf = crfs[-1]
+    for crf in crfs:
+        selected_crf = crf
+        compress_video(
+            input_path=input_path,
+            output_path=output_path,
+            video_codec=str(compression_config.get("video_codec", "libx264")),
+            preset=str(compression_config.get("preset", "medium")),
+            crf=crf,
+            audio_codec=str(compression_config.get("audio_codec", "aac")),
+            audio_bitrate=str(compression_config.get("audio_bitrate", "160k")),
+            faststart=bool(compression_config.get("faststart", True)),
+        )
+        final_size_bytes = output_path.stat().st_size
+        if final_size_bytes <= max_size_bytes:
+            break
+
+    if input_path.exists():
+        input_path.unlink()
+
+    within_target = final_size_bytes <= max_size_bytes
+    if within_target:
+        print(f"Compressed final movie written to {output_path} (CRF {selected_crf})")
+    else:
+        print(
+            "Compressed final movie exceeds the configured size target "
+            f"after CRF {selected_crf}: {output_path}"
+        )
+
+    return {
+        "output_path": str(output_path),
+        "source_size_bytes": source_size_bytes,
+        "final_size_bytes": final_size_bytes,
+        "max_size_bytes": max_size_bytes,
+        "selected_crf": selected_crf,
+        "within_size_target": within_target,
     }
 
 
@@ -229,7 +312,7 @@ def _mark_movie_stage(
 
 
 def _current_movie_stage(payload: dict[str, Any]) -> str | None:
-    for stage_name in ("assembly", "batch_colorize", "scene_detection"):
+    for stage_name in ("compression", "assembly", "batch_colorize", "scene_detection"):
         stage_payload = payload.get("stages", {}).get(stage_name, {})
         if stage_payload.get("status") == "running":
             return stage_name

@@ -19,6 +19,17 @@ video:
   crf: 16
   pixel_format: yuv420p
 
+compression:
+  enabled: true
+  video_codec: libx264
+  preset: medium
+  crf: 20
+  max_size_multiplier: 2.0
+  retry_crfs: [23, 26, 28]
+  audio_codec: aac
+  audio_bitrate: 160k
+  faststart: true
+
 scenes:
   detect: true
   threshold: 0.60

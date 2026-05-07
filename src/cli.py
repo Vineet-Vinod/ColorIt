@@ -124,6 +124,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     chroma_propagate_parser.add_argument("--disagreement-start", type=float, default=20.0)
     chroma_propagate_parser.add_argument("--disagreement-end", type=float, default=70.0)
+    chroma_propagate_parser.add_argument(
+        "--scene-cut-threshold",
+        type=float,
+        default=0.0,
+        help="Mean grayscale frame-delta threshold for adding cut-local model keyframes. Disabled by default.",
+    )
+    chroma_propagate_parser.add_argument(
+        "--scene-keyframe-window",
+        type=int,
+        default=2,
+        help="Number of neighboring frames around each detected cut to force as model keyframes.",
+    )
+    chroma_propagate_parser.add_argument(
+        "--chroma-smooth-diameter",
+        type=int,
+        default=0,
+        help="Bilateral filter diameter for propagated Lab chroma. Disabled by default.",
+    )
+    chroma_propagate_parser.add_argument("--chroma-smooth-sigma-color", type=float, default=16.0)
+    chroma_propagate_parser.add_argument("--chroma-smooth-sigma-space", type=float, default=7.0)
+    chroma_propagate_parser.add_argument(
+        "--dark-fill-strength",
+        type=float,
+        default=0.0,
+        help="Borrow nearby propagated chroma into dark low-chroma regions. Disabled by default.",
+    )
+    chroma_propagate_parser.add_argument("--dark-fill-luma-end", type=float, default=92.0)
+    chroma_propagate_parser.add_argument("--dark-fill-chroma-end", type=float, default=22.0)
+    chroma_propagate_parser.add_argument("--dark-fill-sigma", type=float, default=8.0)
+    chroma_propagate_parser.add_argument(
+        "--blue-suppress-strength",
+        type=float,
+        default=0.0,
+        help="Blend blue/cyan-biased chroma toward fallback-color. Requires --fallback-color.",
+    )
+    chroma_propagate_parser.add_argument("--blue-suppress-hue-start", type=float, default=85.0)
+    chroma_propagate_parser.add_argument("--blue-suppress-hue-end", type=float, default=132.0)
     chroma_propagate_parser.add_argument("--overwrite", action="store_true")
     chroma_propagate_parser.set_defaults(handler=handle_model_chroma_propagate)
 
@@ -564,6 +601,18 @@ def handle_model_chroma_propagate(args: argparse.Namespace) -> int:
         fallback_uncertainty=str(args.fallback_uncertainty),
         disagreement_start=float(args.disagreement_start),
         disagreement_end=float(args.disagreement_end),
+        scene_cut_threshold=float(args.scene_cut_threshold),
+        scene_keyframe_window=int(args.scene_keyframe_window),
+        chroma_smooth_diameter=int(args.chroma_smooth_diameter),
+        chroma_smooth_sigma_color=float(args.chroma_smooth_sigma_color),
+        chroma_smooth_sigma_space=float(args.chroma_smooth_sigma_space),
+        dark_fill_strength=float(args.dark_fill_strength),
+        dark_fill_luma_end=float(args.dark_fill_luma_end),
+        dark_fill_chroma_end=float(args.dark_fill_chroma_end),
+        dark_fill_sigma=float(args.dark_fill_sigma),
+        blue_suppress_strength=float(args.blue_suppress_strength),
+        blue_suppress_hue_start=float(args.blue_suppress_hue_start),
+        blue_suppress_hue_end=float(args.blue_suppress_hue_end),
         overwrite=bool(args.overwrite),
     )
 

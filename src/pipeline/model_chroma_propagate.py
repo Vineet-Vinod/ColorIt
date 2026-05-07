@@ -20,6 +20,18 @@ def run_model_chroma_propagate(
     fallback_uncertainty: str,
     disagreement_start: float,
     disagreement_end: float,
+    scene_cut_threshold: float,
+    scene_keyframe_window: int,
+    chroma_smooth_diameter: int,
+    chroma_smooth_sigma_color: float,
+    chroma_smooth_sigma_space: float,
+    dark_fill_strength: float,
+    dark_fill_luma_end: float,
+    dark_fill_chroma_end: float,
+    dark_fill_sigma: float,
+    blue_suppress_strength: float,
+    blue_suppress_hue_start: float,
+    blue_suppress_hue_end: float,
     overwrite: bool,
 ) -> int:
     source_path = source_path.expanduser().resolve()
@@ -49,6 +61,13 @@ def run_model_chroma_propagate(
         raise ValueError("No frames available for chroma propagation.")
 
     keyframe_indices = list(range(0, frame_count, max(1, keyframe_stride)))
+    cut_indices = _detect_scene_cuts(
+        source_frames=source_frames,
+        threshold=scene_cut_threshold,
+        keyframe_window=scene_keyframe_window,
+    )
+    keyframe_indices.extend(cut_indices)
+    keyframe_indices = sorted(set(index for index in keyframe_indices if 0 <= index < frame_count))
     if keyframe_indices[-1] != frame_count - 1:
         keyframe_indices.append(frame_count - 1)
     output_frames = _propagate_chroma(
@@ -61,6 +80,16 @@ def run_model_chroma_propagate(
         fallback_uncertainty=fallback_uncertainty,
         disagreement_start=disagreement_start,
         disagreement_end=disagreement_end,
+        chroma_smooth_diameter=chroma_smooth_diameter,
+        chroma_smooth_sigma_color=chroma_smooth_sigma_color,
+        chroma_smooth_sigma_space=chroma_smooth_sigma_space,
+        dark_fill_strength=dark_fill_strength,
+        dark_fill_luma_end=dark_fill_luma_end,
+        dark_fill_chroma_end=dark_fill_chroma_end,
+        dark_fill_sigma=dark_fill_sigma,
+        blue_suppress_strength=blue_suppress_strength,
+        blue_suppress_hue_start=blue_suppress_hue_start,
+        blue_suppress_hue_end=blue_suppress_hue_end,
     )
     _write_frames(
         output_path=output_path,
@@ -73,6 +102,7 @@ def run_model_chroma_propagate(
     print(f"Model chroma propagation written: {output_path}")
     print(f"Frames: {frame_count}")
     print(f"Keyframes: {len(keyframe_indices)}")
+    print(f"Scene-cut keyframes: {len(cut_indices)}")
     return 0
 
 
@@ -87,6 +117,16 @@ def _propagate_chroma(
     fallback_uncertainty: str,
     disagreement_start: float,
     disagreement_end: float,
+    chroma_smooth_diameter: int,
+    chroma_smooth_sigma_color: float,
+    chroma_smooth_sigma_space: float,
+    dark_fill_strength: float,
+    dark_fill_luma_end: float,
+    dark_fill_chroma_end: float,
+    dark_fill_sigma: float,
+    blue_suppress_strength: float,
+    blue_suppress_hue_start: float,
+    blue_suppress_hue_end: float,
 ) -> list[np.ndarray]:
     if fallback_uncertainty not in {"ab-delta", "hue"}:
         raise ValueError(f"Unsupported fallback uncertainty mode: {fallback_uncertainty}")
@@ -131,12 +171,121 @@ def _propagate_chroma(
                 uncertainty = cv2.GaussianBlur(uncertainty.astype(np.float32), (0, 0), 2.0)
                 fallback_mix = np.clip(uncertainty * fallback_strength, 0.0, 1.0)[:, :, None]
                 propagated_ab = (1.0 - fallback_mix) * propagated_ab + fallback_mix * fallback_ab
+        propagated_ab = _smooth_ab(
+            propagated_ab,
+            diameter=chroma_smooth_diameter,
+            sigma_color=chroma_smooth_sigma_color,
+            sigma_space=chroma_smooth_sigma_space,
+        )
+        propagated_ab = _fill_dark_low_chroma(
+            propagated_ab,
+            source_l=source_l[frame_index],
+            strength=dark_fill_strength,
+            luma_end=dark_fill_luma_end,
+            chroma_end=dark_fill_chroma_end,
+            sigma=dark_fill_sigma,
+        )
+        if fallback_ab is not None and blue_suppress_strength > 0.0:
+            propagated_ab = _suppress_blue_ab(
+                propagated_ab,
+                replacement_ab=fallback_ab,
+                strength=blue_suppress_strength,
+                hue_start=blue_suppress_hue_start,
+                hue_end=blue_suppress_hue_end,
+            )
         deoldify_ab = cv2.cvtColor(source_frames[frame_index], cv2.COLOR_RGB2LAB)[:, :, 1:3].astype(np.float32)
         output_ab = (1.0 - blend) * deoldify_ab + blend * propagated_ab
         output_lab = np.concatenate([source_l[frame_index], output_ab], axis=2)
         output_rgb = cv2.cvtColor(np.clip(output_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
         output_frames.append(output_rgb)
     return output_frames
+
+
+def _detect_scene_cuts(*, source_frames: list[np.ndarray], threshold: float, keyframe_window: int) -> list[int]:
+    if threshold <= 0.0 or len(source_frames) < 2:
+        return []
+    previous_gray = cv2.cvtColor(source_frames[0], cv2.COLOR_RGB2GRAY)
+    cut_indices: set[int] = set()
+    for frame_index, frame in enumerate(source_frames[1:], start=1):
+        current_gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        mean_delta = float(np.mean(cv2.absdiff(previous_gray, current_gray)))
+        if mean_delta >= threshold:
+            for offset in range(-keyframe_window, keyframe_window + 1):
+                cut_indices.add(frame_index + offset)
+        previous_gray = current_gray
+    return sorted(cut_indices)
+
+
+def _smooth_ab(ab: np.ndarray, *, diameter: int, sigma_color: float, sigma_space: float) -> np.ndarray:
+    if diameter <= 0:
+        return ab
+    diameter = diameter if diameter % 2 == 1 else diameter + 1
+    channels = [
+        cv2.bilateralFilter(
+            ab[:, :, channel].astype(np.float32),
+            diameter,
+            sigma_color,
+            sigma_space,
+        )
+        for channel in range(2)
+    ]
+    return np.stack(channels, axis=2)
+
+
+def _fill_dark_low_chroma(
+    ab: np.ndarray,
+    *,
+    source_l: np.ndarray,
+    strength: float,
+    luma_end: float,
+    chroma_end: float,
+    sigma: float,
+) -> np.ndarray:
+    if strength <= 0.0 or sigma <= 0.0:
+        return ab
+    chroma = np.linalg.norm(ab - 128.0, axis=2)
+    confident = _smoothstep(chroma_end, chroma_end + 28.0, chroma)
+    blurred_weight = cv2.GaussianBlur(confident.astype(np.float32), (0, 0), sigma)
+    centered = (ab - 128.0) * confident[:, :, None]
+    borrowed = cv2.GaussianBlur(centered.astype(np.float32), (0, 0), sigma)
+    borrowed = borrowed / np.maximum(blurred_weight[:, :, None], 1e-3) + 128.0
+    borrowed = np.where(blurred_weight[:, :, None] > 0.05, borrowed, ab)
+    dark_mask = 1.0 - _smoothstep(max(luma_end - 35.0, 0.0), luma_end, source_l[:, :, 0])
+    low_chroma_mask = 1.0 - _smoothstep(max(chroma_end - 14.0, 0.0), chroma_end, chroma)
+    mask = cv2.GaussianBlur((dark_mask * low_chroma_mask).astype(np.float32), (0, 0), 1.5)
+    mix = np.clip(mask * strength, 0.0, 1.0)[:, :, None]
+    return (1.0 - mix) * ab + mix * borrowed
+
+
+def _suppress_blue_ab(
+    ab: np.ndarray,
+    *,
+    replacement_ab: np.ndarray,
+    strength: float,
+    hue_start: float,
+    hue_end: float,
+) -> np.ndarray:
+    lab = np.empty((ab.shape[0], ab.shape[1], 3), dtype=np.uint8)
+    lab[:, :, 0] = 128
+    lab[:, :, 1:3] = np.clip(ab, 0, 255).astype(np.uint8)
+    rgb = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV).astype(np.float32)
+    hue = hsv[:, :, 0]
+    saturation = hsv[:, :, 1]
+    if hue_start <= hue_end:
+        hue_mask = (hue >= hue_start) & (hue <= hue_end)
+    else:
+        hue_mask = (hue >= hue_start) | (hue <= hue_end)
+    chroma = np.linalg.norm(ab - 128.0, axis=2)
+    hue_mask = hue_mask.astype(np.float32) * _smoothstep(35.0, 95.0, saturation)
+    cool_lab_mask = _smoothstep(6.0, 28.0, 128.0 - ab[:, :, 1])
+    cool_purple_mask = _smoothstep(8.0, 28.0, ab[:, :, 0] - 128.0)
+    cool_purple_mask *= 1.0 - _smoothstep(12.0, 34.0, ab[:, :, 1] - 128.0)
+    mask = np.maximum(np.maximum(hue_mask, cool_lab_mask), cool_purple_mask)
+    mask *= _smoothstep(10.0, 35.0, chroma)
+    mask = cv2.GaussianBlur(mask, (0, 0), 1.5)
+    mix = np.clip(mask * strength, 0.0, 1.0)[:, :, None]
+    return (1.0 - mix) * ab + mix * replacement_ab
 
 
 def _chroma_disagreement(*, forward: np.ndarray, backward: np.ndarray, mode: str) -> np.ndarray:

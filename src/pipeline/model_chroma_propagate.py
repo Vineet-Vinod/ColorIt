@@ -17,6 +17,7 @@ def run_model_chroma_propagate(
     chroma_blend: float,
     fallback_color_hex: str | None,
     fallback_strength: float,
+    fallback_uncertainty: str,
     disagreement_start: float,
     disagreement_end: float,
     overwrite: bool,
@@ -57,6 +58,7 @@ def run_model_chroma_propagate(
         chroma_blend=chroma_blend,
         fallback_ab=fallback_ab,
         fallback_strength=fallback_strength,
+        fallback_uncertainty=fallback_uncertainty,
         disagreement_start=disagreement_start,
         disagreement_end=disagreement_end,
     )
@@ -82,9 +84,12 @@ def _propagate_chroma(
     chroma_blend: float,
     fallback_ab: np.ndarray | None,
     fallback_strength: float,
+    fallback_uncertainty: str,
     disagreement_start: float,
     disagreement_end: float,
 ) -> list[np.ndarray]:
+    if fallback_uncertainty not in {"ab-delta", "hue"}:
+        raise ValueError(f"Unsupported fallback uncertainty mode: {fallback_uncertainty}")
     source_gray = [cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY) for frame in source_frames]
     source_l = [cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)[:, :, :1].astype(np.float32) for frame in source_frames]
     model_ab_by_key = {
@@ -121,7 +126,7 @@ def _propagate_chroma(
             backward = backward_ab[frame_index]
             propagated_ab = (1.0 - t) * forward + t * backward
             if fallback_ab is not None and fallback_strength > 0.0:
-                disagreement = np.linalg.norm(forward - backward, axis=2)
+                disagreement = _chroma_disagreement(forward=forward, backward=backward, mode=fallback_uncertainty)
                 uncertainty = _smoothstep(disagreement_start, disagreement_end, disagreement)
                 uncertainty = cv2.GaussianBlur(uncertainty.astype(np.float32), (0, 0), 2.0)
                 fallback_mix = np.clip(uncertainty * fallback_strength, 0.0, 1.0)[:, :, None]
@@ -132,6 +137,21 @@ def _propagate_chroma(
         output_rgb = cv2.cvtColor(np.clip(output_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
         output_frames.append(output_rgb)
     return output_frames
+
+
+def _chroma_disagreement(*, forward: np.ndarray, backward: np.ndarray, mode: str) -> np.ndarray:
+    if mode == "ab-delta":
+        return np.linalg.norm(forward - backward, axis=2)
+
+    forward_centered = forward - 128.0
+    backward_centered = backward - 128.0
+    forward_norm = np.linalg.norm(forward_centered, axis=2)
+    backward_norm = np.linalg.norm(backward_centered, axis=2)
+    norm_product = np.maximum(forward_norm * backward_norm, 1e-6)
+    cosine = np.sum(forward_centered * backward_centered, axis=2) / norm_product
+    hue_angle = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
+    low_chroma = 1.0 - _smoothstep(8.0, 24.0, np.minimum(forward_norm, backward_norm))
+    return np.maximum(hue_angle, low_chroma * 45.0)
 
 
 def _smoothstep(edge0: float, edge1: float, value: np.ndarray) -> np.ndarray:

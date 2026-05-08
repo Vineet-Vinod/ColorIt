@@ -9,6 +9,9 @@ import numpy as np
 from src.pipeline.ffmpeg_utils import ffprobe_media, open_rawvideo_reader, open_rawvideo_writer
 
 
+CHROMA_TEMPORAL_ALPHA = 0.25
+
+
 def run_model_chroma_propagate(
     *,
     source_path: Path,
@@ -59,7 +62,7 @@ def run_model_chroma_propagate(
     )
     print(f"Model chroma propagation written: {output_path}")
     print(f"Frames: {frame_count}")
-    print("Chroma mode: direct")
+    print("Chroma mode: temporal-direct")
     print(f"Runtime seconds: {time.perf_counter() - started:.2f}")
     return 0
 
@@ -72,14 +75,20 @@ def _propagate_chroma(
 ) -> list[np.ndarray]:
     output_frames: list[np.ndarray] = []
     blend = float(np.clip(chroma_blend, 0.0, 1.0))
+    previous_ab: np.ndarray | None = None
     for source_frame, model_frame in zip(source_frames, model_frames):
         source_lab = cv2.cvtColor(source_frame, cv2.COLOR_RGB2LAB)
-        model_ab = cv2.cvtColor(model_frame, cv2.COLOR_RGB2LAB)[:, :, 1:3]
+        model_ab = cv2.cvtColor(model_frame, cv2.COLOR_RGB2LAB)[:, :, 1:3].astype(np.float32)
+        if previous_ab is None:
+            smoothed_ab = model_ab
+        else:
+            smoothed_ab = CHROMA_TEMPORAL_ALPHA * model_ab + (1.0 - CHROMA_TEMPORAL_ALPHA) * previous_ab
+        previous_ab = smoothed_ab
         if blend >= 1.0:
-            source_lab[:, :, 1:3] = model_ab
+            source_lab[:, :, 1:3] = np.clip(smoothed_ab, 0, 255).astype(np.uint8)
         else:
             source_ab = source_lab[:, :, 1:3].astype(np.float32)
-            output_ab = (1.0 - blend) * source_ab + blend * model_ab.astype(np.float32)
+            output_ab = (1.0 - blend) * source_ab + blend * smoothed_ab
             source_lab[:, :, 1:3] = np.clip(output_ab, 0, 255).astype(np.uint8)
         output_frames.append(cv2.cvtColor(source_lab, cv2.COLOR_LAB2RGB))
     return output_frames

@@ -197,10 +197,25 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Semantic garment label to use for consensus. Can be passed multiple times.",
     )
+    chroma_propagate_parser.add_argument(
+        "--semantic-protect-label",
+        action="append",
+        default=[],
+        help="Semantic label to subtract from garment consensus masks. Can be passed multiple times.",
+    )
+    chroma_propagate_parser.add_argument("--semantic-protect-dilate", type=int, default=2)
+    chroma_propagate_parser.add_argument(
+        "--semantic-split-label",
+        action="append",
+        default=[],
+        help="Semantic label whose component centroids split merged garment masks. Can be passed multiple times.",
+    )
     chroma_propagate_parser.add_argument("--semantic-consensus-strength", type=float, default=0.0)
     chroma_propagate_parser.add_argument("--semantic-consensus-min-area", type=int, default=700)
     chroma_propagate_parser.add_argument("--semantic-consensus-model-chroma-min", type=float, default=10.0)
     chroma_propagate_parser.add_argument("--semantic-consensus-feather-sigma", type=float, default=1.2)
+    chroma_propagate_parser.add_argument("--semantic-consensus-diversify-strength", type=float, default=0.0)
+    chroma_propagate_parser.add_argument("--semantic-consensus-diversify-threshold", type=float, default=12.0)
     chroma_propagate_parser.add_argument("--overwrite", action="store_true")
     chroma_propagate_parser.set_defaults(handler=handle_model_chroma_propagate)
 
@@ -667,10 +682,15 @@ def handle_model_chroma_propagate(args: argparse.Namespace) -> int:
         if args.semantic_consensus_manifest
         else None,
         semantic_consensus_labels=[str(label) for label in args.semantic_consensus_label],
+        semantic_protect_labels=[str(label) for label in args.semantic_protect_label],
+        semantic_protect_dilate=int(args.semantic_protect_dilate),
+        semantic_split_labels=[str(label) for label in args.semantic_split_label],
         semantic_consensus_strength=float(args.semantic_consensus_strength),
         semantic_consensus_min_area=int(args.semantic_consensus_min_area),
         semantic_consensus_model_chroma_min=float(args.semantic_consensus_model_chroma_min),
         semantic_consensus_feather_sigma=float(args.semantic_consensus_feather_sigma),
+        semantic_consensus_diversify_strength=float(args.semantic_consensus_diversify_strength),
+        semantic_consensus_diversify_threshold=float(args.semantic_consensus_diversify_threshold),
         overwrite=bool(args.overwrite),
     )
 

@@ -45,10 +45,15 @@ def run_model_chroma_propagate(
     blue_suppress_hue_end: float,
     semantic_consensus_manifest_path: Path | None,
     semantic_consensus_labels: list[str],
+    semantic_protect_labels: list[str],
+    semantic_protect_dilate: int,
+    semantic_split_labels: list[str],
     semantic_consensus_strength: float,
     semantic_consensus_min_area: int,
     semantic_consensus_model_chroma_min: float,
     semantic_consensus_feather_sigma: float,
+    semantic_consensus_diversify_strength: float,
+    semantic_consensus_diversify_threshold: float,
     overwrite: bool,
 ) -> int:
     source_path = source_path.expanduser().resolve()
@@ -79,6 +84,9 @@ def run_model_chroma_propagate(
     semantic_masks_by_frame = _load_semantic_consensus_masks(
         manifest_path=semantic_consensus_manifest_path,
         labels=semantic_consensus_labels,
+        protect_labels=semantic_protect_labels,
+        protect_dilate=semantic_protect_dilate,
+        split_labels=semantic_split_labels,
         frame_count=frame_count,
         width=width,
         height=height,
@@ -129,6 +137,8 @@ def run_model_chroma_propagate(
         semantic_consensus_min_area=semantic_consensus_min_area,
         semantic_consensus_model_chroma_min=semantic_consensus_model_chroma_min,
         semantic_consensus_feather_sigma=semantic_consensus_feather_sigma,
+        semantic_consensus_diversify_strength=semantic_consensus_diversify_strength,
+        semantic_consensus_diversify_threshold=semantic_consensus_diversify_threshold,
     )
     _write_frames(
         output_path=output_path,
@@ -181,6 +191,8 @@ def _propagate_chroma(
     semantic_consensus_min_area: int,
     semantic_consensus_model_chroma_min: float,
     semantic_consensus_feather_sigma: float,
+    semantic_consensus_diversify_strength: float,
+    semantic_consensus_diversify_threshold: float,
 ) -> list[np.ndarray]:
     if fallback_uncertainty not in {"ab-delta", "hue"}:
         raise ValueError(f"Unsupported fallback uncertainty mode: {fallback_uncertainty}")
@@ -194,6 +206,8 @@ def _propagate_chroma(
         strength=semantic_consensus_strength,
         min_area=semantic_consensus_min_area,
         model_chroma_min=semantic_consensus_model_chroma_min,
+        diversify_strength=semantic_consensus_diversify_strength,
+        diversify_threshold=semantic_consensus_diversify_threshold,
     )
 
     forward_ab: dict[int, np.ndarray] = {}
@@ -294,6 +308,9 @@ def _load_semantic_consensus_masks(
     *,
     manifest_path: Path | None,
     labels: list[str],
+    protect_labels: list[str],
+    protect_dilate: int,
+    split_labels: list[str],
     frame_count: int,
     width: int,
     height: int,
@@ -305,12 +322,17 @@ def _load_semantic_consensus_masks(
     manifest = json.loads(manifest_path.read_text())
     manifest_dir = manifest_path.parent
     label_set = {label.strip() for label in labels if label.strip()}
+    protect_label_set = {label.strip() for label in protect_labels if label.strip()}
+    split_label_set = {label.strip() for label in split_labels if label.strip()}
+    protect_masks_by_frame: list[np.ndarray] = [np.zeros((height, width), dtype=bool) for _ in range(frame_count)]
+    split_centers_by_frame: list[list[tuple[float, float]]] = [[] for _ in range(frame_count)]
     for frame in manifest.get("frames", [])[:frame_count]:
         frame_index = int(frame["frame_index"])
         if frame_index >= frame_count:
             continue
         for instance in frame.get("instances", []):
-            if label_set and instance.get("label") not in label_set:
+            label = instance.get("label")
+            if label_set and label not in label_set and label not in protect_label_set and label not in split_label_set:
                 continue
             mask_path = manifest_dir / str(instance["mask_path"])
             mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
@@ -318,8 +340,56 @@ def _load_semantic_consensus_masks(
                 raise FileNotFoundError(f"Semantic mask not found: {mask_path}")
             if mask.shape[:2] != (height, width):
                 mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
-            masks_by_frame[frame_index].append(mask >= 128)
+            bool_mask = mask >= 128
+            if label in protect_label_set:
+                protect_masks_by_frame[frame_index] |= bool_mask
+            elif label in split_label_set:
+                split_centers_by_frame[frame_index].extend(_mask_centers(bool_mask, min_area=120))
+            elif not label_set or label in label_set:
+                masks_by_frame[frame_index].append(bool_mask)
+    kernel = None
+    if protect_label_set and protect_dilate > 0:
+        size = protect_dilate * 2 + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+    for frame_index, masks in enumerate(masks_by_frame):
+        protect_mask = protect_masks_by_frame[frame_index].astype(np.uint8)
+        if kernel is not None:
+            protect_mask = cv2.dilate(protect_mask, kernel, iterations=1)
+        protect_bool = protect_mask > 0
+        cleaned_masks = [mask & ~protect_bool for mask in masks]
+        masks_by_frame[frame_index] = _split_masks_by_centers(cleaned_masks, split_centers_by_frame[frame_index])
     return masks_by_frame
+
+
+def _mask_centers(mask: np.ndarray, *, min_area: int) -> list[tuple[float, float]]:
+    component_count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
+    centers: list[tuple[float, float]] = []
+    for component_index in range(1, component_count):
+        if int(stats[component_index, cv2.CC_STAT_AREA]) >= min_area:
+            centers.append((float(centroids[component_index][0]), float(centroids[component_index][1])))
+    return centers
+
+
+def _split_masks_by_centers(masks: list[np.ndarray], centers: list[tuple[float, float]]) -> list[np.ndarray]:
+    if len(centers) < 2:
+        return masks
+    center_array = np.array(centers, dtype=np.float32)
+    split_masks: list[np.ndarray] = []
+    for mask in masks:
+        y_coords, x_coords = np.nonzero(mask)
+        if len(x_coords) == 0:
+            continue
+        points = np.stack([x_coords, y_coords], axis=1).astype(np.float32)
+        distances = np.linalg.norm(points[:, None, :] - center_array[None, :, :], axis=2)
+        assignments = np.argmin(distances, axis=1)
+        for center_index in range(len(centers)):
+            selected = assignments == center_index
+            if int(np.count_nonzero(selected)) < 200:
+                continue
+            split_mask = np.zeros_like(mask, dtype=bool)
+            split_mask[y_coords[selected], x_coords[selected]] = True
+            split_masks.append(split_mask)
+    return split_masks
 
 
 def _build_temporal_semantic_consensus(
@@ -329,15 +399,17 @@ def _build_temporal_semantic_consensus(
     strength: float,
     min_area: int,
     model_chroma_min: float,
+    diversify_strength: float,
+    diversify_threshold: float,
 ) -> list[list[tuple[np.ndarray, np.ndarray]]]:
     consensus_by_frame: list[list[tuple[np.ndarray, np.ndarray]]] = [[] for _ in masks_by_frame]
     if strength <= 0.0 or not any(masks_by_frame):
         return consensus_by_frame
 
     tracks: dict[int, dict[str, object]] = {}
-    active_track_ids: list[int] = []
     next_track_id = 1
     component_refs: list[tuple[int, int, np.ndarray]] = []
+    cooccurring_track_ids_by_frame: list[list[int]] = []
 
     for frame_index, masks in enumerate(masks_by_frame):
         model_ab = model_ab_frames[frame_index]
@@ -351,6 +423,11 @@ def _build_temporal_semantic_consensus(
         )
         assigned_tracks: set[int] = set()
         new_active_track_ids: list[int] = []
+        active_track_ids = [
+            track_id
+            for track_id, track in tracks.items()
+            if frame_index - int(track.get("last_frame_index", -9999)) <= 8
+        ]
         for component in components:
             track_id = _match_semantic_track(
                 component=component,
@@ -365,9 +442,11 @@ def _build_temporal_semantic_consensus(
             new_active_track_ids.append(track_id)
             tracks[track_id]["bbox"] = component["bbox"]
             tracks[track_id]["centroid"] = component["centroid"]
+            tracks[track_id]["last_frame_index"] = frame_index
+            tracks[track_id].setdefault("centroids", []).append(component["centroid"])
             tracks[track_id]["samples"].append(component["samples"])
             component_refs.append((frame_index, track_id, component["mask"]))
-        active_track_ids = new_active_track_ids
+        cooccurring_track_ids_by_frame.append(new_active_track_ids)
 
     track_targets: dict[int, np.ndarray] = {}
     for track_id, track in tracks.items():
@@ -375,6 +454,14 @@ def _build_temporal_semantic_consensus(
         if not samples:
             continue
         track_targets[track_id] = np.median(np.concatenate(samples, axis=0), axis=0).astype(np.float32)
+    if diversify_strength > 0.0:
+        _diversify_cooccurring_track_targets(
+            track_targets=track_targets,
+            tracks=tracks,
+            cooccurring_track_ids_by_frame=cooccurring_track_ids_by_frame,
+            strength=diversify_strength,
+            threshold=diversify_threshold,
+        )
 
     for frame_index, track_id, mask in component_refs:
         target_ab = track_targets.get(track_id)
@@ -440,6 +527,51 @@ def _match_semantic_track(
     if best_score < 0.25:
         return None
     return best_track_id
+
+
+def _diversify_cooccurring_track_targets(
+    *,
+    track_targets: dict[int, np.ndarray],
+    tracks: dict[int, dict[str, object]],
+    cooccurring_track_ids_by_frame: list[list[int]],
+    strength: float,
+    threshold: float,
+) -> None:
+    close_edges: set[tuple[int, int]] = set()
+    for track_ids in cooccurring_track_ids_by_frame:
+        visible = [track_id for track_id in track_ids if track_id in track_targets]
+        for first_index, first_id in enumerate(visible):
+            for second_id in visible[first_index + 1 :]:
+                distance = float(np.linalg.norm(track_targets[first_id] - track_targets[second_id]))
+                if distance < threshold:
+                    close_edges.add(tuple(sorted((first_id, second_id))))
+    if not close_edges:
+        return
+
+    palette = np.array(
+        [
+            _hex_to_lab_ab("#556f9f"),
+            _hex_to_lab_ab("#815a82"),
+            _hex_to_lab_ab("#777446"),
+            _hex_to_lab_ab("#4f7d78"),
+            _hex_to_lab_ab("#89525a"),
+        ],
+        dtype=np.float32,
+    )
+    involved_track_ids = sorted({track_id for edge in close_edges for track_id in edge}, key=lambda track_id: _track_x(tracks, track_id))
+    used_palette_indices: set[int] = set()
+    for order, track_id in enumerate(involved_track_ids):
+        original = track_targets[track_id]
+        palette_index = order % len(palette)
+        used_palette_indices.add(palette_index)
+        track_targets[track_id] = (1.0 - strength) * original + strength * palette[palette_index]
+
+
+def _track_x(tracks: dict[int, dict[str, object]], track_id: int) -> float:
+    centroids = tracks[track_id].get("centroids", [])
+    if not centroids:
+        return 0.0
+    return float(np.median([centroid[0] for centroid in centroids]))
 
 
 def _bbox_iou(first: object, second: object) -> float:

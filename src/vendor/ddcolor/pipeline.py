@@ -85,42 +85,51 @@ class ColorizationPipeline:
         self.model.eval()
 
     def process(self, img_bgr: np.ndarray) -> np.ndarray:
+        return self.process_batch([img_bgr])[0]
+
+    def process_batch(self, img_bgrs: list[np.ndarray]) -> list[np.ndarray]:
+        if not img_bgrs:
+            return []
+
         ctx = torch.inference_mode if hasattr(torch, "inference_mode") else torch.no_grad
         with ctx():
-            if img_bgr is None:
-                raise ValueError("img is None (cv2.imread failed?)")
+            height, width = img_bgrs[0].shape[:2]
+            orig_l_batch = []
+            gray_rgb_batch = []
+            for img_bgr in img_bgrs:
+                if img_bgr is None:
+                    raise ValueError("img is None (cv2.imread failed?)")
+                if img_bgr.shape[:2] != (height, width):
+                    raise ValueError("All batch frames must have matching dimensions.")
 
-            height, width = img_bgr.shape[:2]
+                img = (img_bgr / 255.0).astype(np.float32)
+                orig_l_batch.append(cv2.cvtColor(img, cv2.COLOR_BGR2Lab)[:, :, :1])
 
-            img = (img_bgr / 255.0).astype(np.float32)
-            orig_l = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)[:, :, :1]  # (h, w, 1)
-
-            # resize rgb image -> lab -> get grey -> rgb
-            img_resized = cv2.resize(img, (self.input_size, self.input_size))
-            img_l = cv2.cvtColor(img_resized, cv2.COLOR_BGR2Lab)[:, :, :1]
-            img_gray_lab = np.concatenate(
-                (img_l, np.zeros_like(img_l), np.zeros_like(img_l)), axis=-1
-            )
-            img_gray_rgb = cv2.cvtColor(img_gray_lab, cv2.COLOR_LAB2RGB)
+                img_resized = cv2.resize(img, (self.input_size, self.input_size))
+                img_l = cv2.cvtColor(img_resized, cv2.COLOR_BGR2Lab)[:, :, :1]
+                img_gray_lab = np.concatenate(
+                    (img_l, np.zeros_like(img_l), np.zeros_like(img_l)), axis=-1
+                )
+                gray_rgb_batch.append(cv2.cvtColor(img_gray_lab, cv2.COLOR_LAB2RGB))
 
             tensor_gray_rgb = (
-                torch.from_numpy(img_gray_rgb.transpose((2, 0, 1)))
+                torch.from_numpy(np.stack(gray_rgb_batch).transpose((0, 3, 1, 2)))
                 .float()
-                .unsqueeze(0)
                 .to(self.device)
             )
 
-            output_ab = self.model(tensor_gray_rgb).cpu()  # (1, 2, input_size, input_size)
-
-            # resize ab -> concat original l -> bgr
+            output_ab = self.model(tensor_gray_rgb)
             output_ab_resized = (
-                F.interpolate(output_ab, size=(height, width))[0]
+                F.interpolate(output_ab, size=(height, width))
                 .float()
+                .cpu()
                 .numpy()
-                .transpose(1, 2, 0)
+                .transpose(0, 2, 3, 1)
             )
-            output_lab = np.concatenate((orig_l, output_ab_resized), axis=-1)
-            output_bgr = cv2.cvtColor(output_lab, cv2.COLOR_LAB2BGR)
 
-            output_img = (output_bgr * 255.0).round().astype(np.uint8)
-            return output_img
+            output_imgs = []
+            for orig_l, output_ab_frame in zip(orig_l_batch, output_ab_resized, strict=True):
+                output_lab = np.concatenate((orig_l, output_ab_frame), axis=-1)
+                output_bgr = cv2.cvtColor(output_lab, cv2.COLOR_LAB2BGR)
+                output_imgs.append((output_bgr * 255.0).round().astype(np.uint8))
+            return output_imgs

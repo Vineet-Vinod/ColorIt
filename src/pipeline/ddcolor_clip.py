@@ -13,6 +13,7 @@ from src.vendor.ddcolor import DDColor, ColorizationPipeline, build_ddcolor_mode
 
 
 DEFAULT_DDCOLOR_WEIGHTS_PATH = Path("models/ddcolor/pytorch_model.bin")
+DDCOLOR_BATCH_SIZE = 16
 _COLORIZER_CACHE: dict[tuple[str, int, str], ColorizationPipeline] = {}
 _COLORIZER_LOCK = threading.Lock()
 
@@ -76,19 +77,23 @@ def run_ddcolor_clip(
     start = time.time()
     try:
         while True:
-            frame_data = reader.stdout.read(frame_bytes)
-            if not frame_data:
+            batch_bgrs: list[np.ndarray] = []
+            for _ in range(DDCOLOR_BATCH_SIZE):
+                frame_data = reader.stdout.read(frame_bytes)
+                if not frame_data:
+                    break
+                if len(frame_data) != frame_bytes:
+                    raise RuntimeError(
+                        f"Unexpected end of rawvideo stream; expected {frame_bytes} bytes, got {len(frame_data)}."
+                    )
+                frame_rgb = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
+                batch_bgrs.append(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
+            if not batch_bgrs:
                 break
-            if len(frame_data) != frame_bytes:
-                raise RuntimeError(
-                    f"Unexpected end of rawvideo stream; expected {frame_bytes} bytes, got {len(frame_data)}."
-                )
-            frame_rgb = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
-            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-            output_bgr = colorizer.process(frame_bgr)
-            output_rgb = cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB)
-            writer.stdin.write(np.ascontiguousarray(output_rgb).tobytes())
-            frame_index += 1
+            for output_bgr in colorizer.process_batch(batch_bgrs):
+                output_rgb = cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB)
+                writer.stdin.write(np.ascontiguousarray(output_rgb).tobytes())
+                frame_index += 1
 
         writer.stdin.close()
         writer_returncode = writer.wait()
@@ -109,8 +114,11 @@ def run_ddcolor_clip(
     runtime = time.time() - start
     print(f"DDColor clip written: {output_path}")
     print(f"Frames: {frame_index}")
+    print(f"Batch size: {DDCOLOR_BATCH_SIZE}")
     print(f"Runtime seconds: {runtime:.2f}")
     return 0
+
+
 def _select_device(device: str) -> torch.device:
     if device == "auto":
         if torch.backends.mps.is_available():

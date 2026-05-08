@@ -7,11 +7,19 @@ from typing import Any
 
 from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import AppConfig
+from src.pipeline.ddcolor_clip import DEFAULT_DDCOLOR_WEIGHTS_PATH, run_ddcolor_clip
 from src.pipeline.ffmpeg_utils import extract_clip
 from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
+from src.pipeline.model_chroma_propagate import run_model_chroma_propagate
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 from src.pipeline.scenes import load_scene_manifest
+from src.pipeline.segment_clip import run_segment_clip
+
+
+GARMENT_LABELS = ["upper_clothes", "dress", "skirt", "pants", "coat"]
+PROTECT_LABELS = ["face", "hair", "left_arm", "right_arm", "left_leg", "right_leg"]
+SPLIT_LABELS = ["face", "hair"]
 
 
 @dataclass(frozen=True)
@@ -49,8 +57,11 @@ def run_colorize_batch(
     run_id = scene_manifest_path.stem
     scene_output_dir = paths.scene_dir / run_id
     colorized_output_dir = paths.colorized_dir / "scenes" / run_id
-    scene_output_dir.mkdir(parents=True, exist_ok=True)
-    colorized_output_dir.mkdir(parents=True, exist_ok=True)
+    deoldify_output_dir = paths.colorized_dir / "deoldify" / run_id
+    ddcolor_output_dir = paths.colorized_dir / "ddcolor" / run_id
+    segment_output_dir = paths.colorized_dir / "segments" / run_id
+    for directory in (scene_output_dir, colorized_output_dir, deoldify_output_dir, ddcolor_output_dir, segment_output_dir):
+        directory.mkdir(parents=True, exist_ok=True)
     cleanup_scene_clips = bool(config.raw.get("runtime", {}).get("cleanup_scene_clips", True))
 
     batch_manifest_path = paths.manifest_dir / f"full_run_{run_id}.json"
@@ -78,6 +89,9 @@ def run_colorize_batch(
     for scene in scenes:
         scene_id = scene["scene_id"]
         scene_clip_path = scene_output_dir / f"{scene_id}.mp4"
+        deoldify_clip_path = deoldify_output_dir / f"{scene_id}.mp4"
+        ddcolor_clip_path = ddcolor_output_dir / f"{scene_id}.mp4"
+        segment_dir = segment_output_dir / scene_id
         colorized_clip_path = colorized_output_dir / f"{scene_id}.mp4"
         existing_status = _get_scene_status(batch_payload, scene_id)
 
@@ -108,10 +122,40 @@ def run_colorize_batch(
                 config=config,
                 config_path=config_path,
                 input_path=scene_clip_path,
-                output_path=colorized_clip_path,
+                output_path=deoldify_clip_path,
                 manifest_path=scene_runs_manifest_path,
                 overwrite=True,
                 model_bundle=shared_bundle,
+            )
+            run_ddcolor_clip(
+                input_path=scene_clip_path,
+                output_path=ddcolor_clip_path,
+                weights_path=paths.root / DEFAULT_DDCOLOR_WEIGHTS_PATH,
+                input_size=256,
+                device="auto",
+                output_preset="ultrafast",
+                overwrite=True,
+            )
+            run_segment_clip(
+                input_path=scene_clip_path,
+                output_dir=segment_dir,
+                model_id=None,
+                device="auto",
+                frame_stride=8,
+                include_labels=sorted(set(GARMENT_LABELS + PROTECT_LABELS + SPLIT_LABELS)),
+                overwrite=True,
+            )
+            run_model_chroma_propagate(
+                source_path=deoldify_clip_path,
+                model_color_path=ddcolor_clip_path,
+                output_path=colorized_clip_path,
+                semantic_consensus_manifest_path=segment_dir / "segment_manifest.json",
+                semantic_consensus_labels=GARMENT_LABELS,
+                semantic_protect_labels=PROTECT_LABELS,
+                semantic_split_labels=SPLIT_LABELS,
+                semantic_consensus_strength=0.92,
+                output_preset="ultrafast",
+                overwrite=True,
             )
             status = BatchSceneStatus(
                 scene_id=scene_id,

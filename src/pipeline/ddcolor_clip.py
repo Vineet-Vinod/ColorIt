@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 import time
 
 import cv2
@@ -12,6 +13,8 @@ from src.vendor.ddcolor import DDColor, ColorizationPipeline, build_ddcolor_mode
 
 
 DEFAULT_DDCOLOR_WEIGHTS_PATH = Path("models/ddcolor/pytorch_model.bin")
+_COLORIZER_CACHE: dict[tuple[str, int, str], ColorizationPipeline] = {}
+_COLORIZER_LOCK = threading.Lock()
 
 
 def run_ddcolor_clip(
@@ -41,14 +44,11 @@ def run_ddcolor_clip(
     print(f"Device: {selected_device}")
     print(f"Input size: {input_size}")
 
-    model = build_ddcolor_model(
-        DDColor,
-        model_path=str(weights_path),
+    colorizer = _load_colorizer(
+        weights_path=weights_path,
         input_size=input_size,
-        model_size="large",
         device=selected_device,
     )
-    colorizer = ColorizationPipeline(model, input_size=input_size, device=selected_device)
 
     media_info = ffprobe_media(input_path)
     width = int(media_info["width"])
@@ -119,3 +119,21 @@ def _select_device(device: str) -> torch.device:
             return torch.device("cuda")
         return torch.device("cpu")
     return torch.device(device)
+
+
+def _load_colorizer(*, weights_path: Path, input_size: int, device: torch.device) -> ColorizationPipeline:
+    cache_key = (str(weights_path), int(input_size), str(device))
+    with _COLORIZER_LOCK:
+        colorizer = _COLORIZER_CACHE.get(cache_key)
+        if colorizer is not None:
+            return colorizer
+        model = build_ddcolor_model(
+            DDColor,
+            model_path=str(weights_path),
+            input_size=input_size,
+            model_size="large",
+            device=device,
+        )
+        colorizer = ColorizationPipeline(model, input_size=input_size, device=device)
+        _COLORIZER_CACHE[cache_key] = colorizer
+        return colorizer

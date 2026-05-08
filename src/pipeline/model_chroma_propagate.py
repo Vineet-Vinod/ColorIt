@@ -91,7 +91,7 @@ def _apply_model_chroma_consensus(
     masks_by_frame: list[list[np.ndarray]],
     semantic_consensus_strength: float,
 ) -> list[np.ndarray]:
-    source_l = [cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)[:, :, :1].astype(np.float32) for frame in source_frames]
+    source_lab_frames = [cv2.cvtColor(frame, cv2.COLOR_RGB2LAB).astype(np.float32) for frame in source_frames]
     model_ab_frames = [cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)[:, :, 1:3].astype(np.float32) for frame in model_frames]
     consensus_by_frame = _build_temporal_semantic_consensus(
         masks_by_frame=masks_by_frame,
@@ -105,15 +105,15 @@ def _apply_model_chroma_consensus(
 
     output_frames: list[np.ndarray] = []
     mix_cache: dict[int, np.ndarray] = {}
-    for frame_index, model_ab in enumerate(model_ab_frames):
+    for frame_index, source_lab in enumerate(source_lab_frames):
         output_ab = _apply_semantic_chroma_consensus(
-            model_ab,
+            source_lab[:, :, 1:3],
             targets=consensus_by_frame[frame_index],
             strength=semantic_consensus_strength,
             feather_sigma=SEMANTIC_FEATHER_SIGMA,
             mix_cache=mix_cache,
         )
-        output_lab = np.concatenate([source_l[frame_index], output_ab], axis=2)
+        output_lab = np.concatenate([source_lab[:, :, :1], output_ab], axis=2)
         output_frames.append(cv2.cvtColor(np.clip(output_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB))
     return output_frames
 

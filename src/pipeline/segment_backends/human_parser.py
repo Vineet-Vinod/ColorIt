@@ -22,6 +22,8 @@ from src.pipeline.segments import (
 
 DEFAULT_HUMAN_PARSER_MODEL_ID = "models/segformer_b2_clothes"
 _MODEL_LOAD_LOCK = threading.Lock()
+_DEPENDENCIES: tuple[Any, Any, Any] | None = None
+_MODEL_CACHE: dict[tuple[str, str], tuple[Any, Any, dict[int, str]]] = {}
 
 
 def run_human_parser_segmentation(
@@ -35,8 +37,7 @@ def run_human_parser_segmentation(
     overwrite: bool,
     skip_background: bool = True,
 ) -> SegmentManifest:
-    with _MODEL_LOAD_LOCK:
-        torch, auto_image_processor, auto_model = _load_transformers_dependencies()
+    torch, auto_image_processor, auto_model = _load_transformers_dependencies()
 
     input_path = input_path.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
@@ -54,12 +55,12 @@ def run_human_parser_segmentation(
 
     selected_device = _select_device(torch, device)
     model_source = _resolve_model_source(model_id)
-    with _MODEL_LOAD_LOCK:
-        processor = auto_image_processor.from_pretrained(model_source, trust_remote_code=False)
-        model = auto_model.from_pretrained(model_source, trust_remote_code=False)
-    model.to(selected_device)
-    model.eval()
-    id_to_label = {int(key): str(value) for key, value in model.config.id2label.items()}
+    processor, model, id_to_label = _load_parser_model(
+        auto_image_processor=auto_image_processor,
+        auto_model=auto_model,
+        model_source=model_source,
+        device=selected_device,
+    )
     include_label_set = {
         _normalize_label(label)
         for label in (include_labels or [])
@@ -216,15 +217,36 @@ def _select_device(torch, requested_device: str):
 
 
 def _load_transformers_dependencies():
+    global _DEPENDENCIES
     try:
-        import torch
-        from transformers import AutoImageProcessor, AutoModelForSemanticSegmentation
+        with _MODEL_LOAD_LOCK:
+            if _DEPENDENCIES is None:
+                import torch
+                from transformers import AutoImageProcessor, AutoModelForSemanticSegmentation
+
+                _DEPENDENCIES = (torch, AutoImageProcessor, AutoModelForSemanticSegmentation)
+            return _DEPENDENCIES
     except ImportError as exc:
         raise RuntimeError(
             "The human-parser backend requires optional dependencies: "
             "torch, transformers, safetensors, and pillow. Install the segmentation extra first."
         ) from exc
-    return torch, AutoImageProcessor, AutoModelForSemanticSegmentation
+
+
+def _load_parser_model(*, auto_image_processor, auto_model, model_source: str, device) -> tuple[Any, Any, dict[int, str]]:
+    cache_key = (model_source, str(device))
+    with _MODEL_LOAD_LOCK:
+        cached = _MODEL_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+        processor = auto_image_processor.from_pretrained(model_source, trust_remote_code=False)
+        model = auto_model.from_pretrained(model_source, trust_remote_code=False)
+        model.to(device)
+        model.eval()
+        id_to_label = {int(key): str(value) for key, value in model.config.id2label.items()}
+        cached = (processor, model, id_to_label)
+        _MODEL_CACHE[cache_key] = cached
+        return cached
 
 
 def _resolve_model_source(model_id: str) -> str:

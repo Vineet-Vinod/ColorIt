@@ -8,7 +8,6 @@ import sys
 from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import load_config
 from src.pipeline.ddcolor_clip import DEFAULT_DDCOLOR_WEIGHTS_PATH, run_ddcolor_clip
-from src.pipeline.fast_semantic_movie import run_fast_semantic_movie
 from src.pipeline.inference import colorize_image_file
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.movie import run_colorize_movie
@@ -21,7 +20,6 @@ COMMANDS = {
     "colorize-frame",
     "colorize-clip",
     "ddcolor-clip",
-    "fast-semantic-movie",
 }
 VIDEO_SUFFIXES = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm"}
 
@@ -73,16 +71,6 @@ def build_parser() -> argparse.ArgumentParser:
     ddcolor_parser.add_argument("--output-preset", default="medium")
     ddcolor_parser.add_argument("--overwrite", action="store_true")
     ddcolor_parser.set_defaults(handler=handle_ddcolor_clip)
-
-    fast_parser = subparsers.add_parser("fast-semantic-movie", help=argparse.SUPPRESS)
-    fast_parser.add_argument("--input", required=True)
-    fast_parser.add_argument("--output", default=None)
-    fast_parser.add_argument("--weights", default=str(DEFAULT_DDCOLOR_WEIGHTS_PATH))
-    fast_parser.add_argument("--work-dir", default=None)
-    fast_parser.add_argument("--chunk-seconds", type=float, default=60.0)
-    fast_parser.add_argument("--limit-chunks", type=int, default=None)
-    fast_parser.add_argument("--overwrite", action="store_true")
-    fast_parser.set_defaults(handler=handle_fast_semantic_movie)
 
     subparsers._choices_actions = [
         action for action in subparsers._choices_actions if action.dest in {"download-weights", "colorize-movie"}
@@ -144,18 +132,6 @@ def handle_ddcolor_clip(args: argparse.Namespace) -> int:
         input_size=int(args.input_size),
         device=str(args.device),
         output_preset=str(args.output_preset),
-        overwrite=bool(args.overwrite),
-    )
-
-
-def handle_fast_semantic_movie(args: argparse.Namespace) -> int:
-    return run_fast_semantic_movie(
-        input_path=Path(args.input),
-        output_path=Path(args.output) if args.output else None,
-        weights_path=Path(args.weights),
-        work_dir=Path(args.work_dir) if args.work_dir else None,
-        chunk_seconds=float(args.chunk_seconds),
-        limit_chunks=args.limit_chunks,
         overwrite=bool(args.overwrite),
     )
 

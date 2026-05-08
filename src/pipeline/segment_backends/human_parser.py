@@ -19,7 +19,7 @@ from src.pipeline.segments import (
 )
 
 
-DEFAULT_HUMAN_PARSER_MODEL_ID = "mattmdjaga/segformer_b2_clothes"
+DEFAULT_HUMAN_PARSER_MODEL_ID = "models/segformer_b2_clothes"
 
 
 def run_human_parser_segmentation(
@@ -48,8 +48,9 @@ def run_human_parser_segmentation(
     frame_bytes = width * height * 3
 
     selected_device = _select_device(torch, device)
-    processor = auto_image_processor.from_pretrained(model_id, trust_remote_code=False)
-    model = auto_model.from_pretrained(model_id, trust_remote_code=False)
+    model_source = _resolve_model_source(model_id)
+    processor = auto_image_processor.from_pretrained(model_source, trust_remote_code=False)
+    model = auto_model.from_pretrained(model_source, trust_remote_code=False)
     model.to(selected_device)
     model.eval()
     id_to_label = {int(key): str(value) for key, value in model.config.id2label.items()}
@@ -187,6 +188,31 @@ def _load_transformers_dependencies():
             "torch, transformers, safetensors, and pillow. Install the segmentation extra first."
         ) from exc
     return torch, AutoImageProcessor, AutoModelForSemanticSegmentation
+
+
+def _resolve_model_source(model_id: str) -> str:
+    candidate = Path(model_id).expanduser()
+    if _is_complete_local_model(candidate):
+        return str(candidate.resolve())
+
+    cwd_candidate = (Path.cwd() / model_id).resolve()
+    if _is_complete_local_model(cwd_candidate):
+        return str(cwd_candidate)
+
+    home_project_candidate = (Path.home() / "ColorIt" / model_id).resolve()
+    if _is_complete_local_model(home_project_candidate):
+        return str(home_project_candidate)
+
+    return model_id
+
+
+def _is_complete_local_model(path: Path) -> bool:
+    return (
+        path.exists()
+        and (path / "config.json").exists()
+        and (path / "preprocessor_config.json").exists()
+        and (path / "model.safetensors").exists()
+    )
 
 
 def _normalize_label(label: str) -> str:

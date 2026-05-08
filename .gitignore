@@ -10,6 +10,7 @@ tmp/
 
 # Model weights and generated media
 models/deoldify/*.pth
+models/segformer_b2_clothes/*
 data/colorized/
 data/final/
 data/frames/
@@ -21,3 +22,4 @@ data/segments/
 # Allow directory placeholders
 !data/**/.gitkeep
 !models/deoldify/.gitkeep
+!models/segformer_b2_clothes/.gitkeep

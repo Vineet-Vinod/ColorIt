@@ -236,6 +236,7 @@ def _propagate_chroma(
 
     output_frames: list[np.ndarray] = []
     blend = float(np.clip(chroma_blend, 0.0, 1.0))
+    semantic_mix_cache: dict[int, np.ndarray] = {}
     for frame_index in range(len(source_frames)):
         model_ab = model_ab_frames[frame_index]
         if propagation_mode == "model":
@@ -285,6 +286,7 @@ def _propagate_chroma(
             targets=semantic_consensus_by_frame[frame_index],
             strength=semantic_consensus_strength,
             feather_sigma=semantic_consensus_feather_sigma,
+            mix_cache=semantic_mix_cache,
         )
         propagated_ab = _smooth_ab(
             propagated_ab,
@@ -338,6 +340,8 @@ def _load_semantic_consensus_masks(
     split_label_set = {label.strip() for label in split_labels if label.strip()}
     protect_masks_by_frame: list[np.ndarray] = [np.zeros((height, width), dtype=bool) for _ in range(frame_count)]
     split_centers_by_frame: list[list[tuple[float, float]]] = [[] for _ in range(frame_count)]
+    mask_cache: dict[Path, np.ndarray] = {}
+    bool_mask_cache: dict[Path, np.ndarray] = {}
     for frame in manifest.get("frames", [])[:frame_count]:
         frame_index = int(frame["frame_index"])
         if frame_index >= frame_count:
@@ -347,12 +351,18 @@ def _load_semantic_consensus_masks(
             if label_set and label not in label_set and label not in protect_label_set and label not in split_label_set:
                 continue
             mask_path = manifest_dir / str(instance["mask_path"])
-            mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+            mask = mask_cache.get(mask_path)
             if mask is None:
-                raise FileNotFoundError(f"Semantic mask not found: {mask_path}")
+                mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+                if mask is None:
+                    raise FileNotFoundError(f"Semantic mask not found: {mask_path}")
+                mask_cache[mask_path] = mask
             if mask.shape[:2] != (height, width):
                 mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
-            bool_mask = mask >= 128
+            bool_mask = bool_mask_cache.get(mask_path)
+            if bool_mask is None:
+                bool_mask = mask >= 128
+                bool_mask_cache[mask_path] = bool_mask
             if label in protect_label_set:
                 protect_masks_by_frame[frame_index] |= bool_mask
             elif label in split_label_set:
@@ -422,6 +432,7 @@ def _build_temporal_semantic_consensus(
     next_track_id = 1
     component_refs: list[tuple[int, int, np.ndarray]] = []
     cooccurring_track_ids_by_frame: list[list[int]] = []
+    component_geometry_cache: dict[int, list[dict[str, object]]] = {}
 
     for frame_index, masks in enumerate(masks_by_frame):
         model_ab = model_ab_frames[frame_index]
@@ -432,6 +443,7 @@ def _build_temporal_semantic_consensus(
             model_chroma=model_chroma,
             min_area=min_area,
             model_chroma_min=model_chroma_min,
+            geometry_cache=component_geometry_cache,
         )
         assigned_tracks: set[int] = set()
         new_active_track_ids: list[int] = []
@@ -489,15 +501,33 @@ def _extract_semantic_components(
     model_chroma: np.ndarray,
     min_area: int,
     model_chroma_min: float,
+    geometry_cache: dict[int, list[dict[str, object]]],
 ) -> list[dict[str, object]]:
     components: list[dict[str, object]] = []
     for mask in masks:
-        component_count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
-        for component_index in range(1, component_count):
-            area = int(stats[component_index, cv2.CC_STAT_AREA])
-            if area < min_area:
-                continue
-            component_mask = labels == component_index
+        geometry = geometry_cache.get(id(mask))
+        if geometry is None:
+            geometry = []
+            component_count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
+            for component_index in range(1, component_count):
+                area = int(stats[component_index, cv2.CC_STAT_AREA])
+                if area < min_area:
+                    continue
+                geometry.append(
+                    {
+                        "mask": labels == component_index,
+                        "bbox": [
+                            int(stats[component_index, cv2.CC_STAT_LEFT]),
+                            int(stats[component_index, cv2.CC_STAT_TOP]),
+                            int(stats[component_index, cv2.CC_STAT_WIDTH]),
+                            int(stats[component_index, cv2.CC_STAT_HEIGHT]),
+                        ],
+                        "centroid": (float(centroids[component_index][0]), float(centroids[component_index][1])),
+                    }
+                )
+            geometry_cache[id(mask)] = geometry
+        for item in geometry:
+            component_mask = item["mask"]
             confident_mask = component_mask & (model_chroma >= model_chroma_min)
             confident_count = int(np.count_nonzero(confident_mask))
             if confident_count < max(20, min_area // 20):
@@ -507,13 +537,8 @@ def _extract_semantic_components(
             components.append(
                 {
                     "mask": component_mask,
-                    "bbox": [
-                        int(stats[component_index, cv2.CC_STAT_LEFT]),
-                        int(stats[component_index, cv2.CC_STAT_TOP]),
-                        int(stats[component_index, cv2.CC_STAT_WIDTH]),
-                        int(stats[component_index, cv2.CC_STAT_HEIGHT]),
-                    ],
-                    "centroid": (float(centroids[component_index][0]), float(centroids[component_index][1])),
+                    "bbox": item["bbox"],
+                    "centroid": item["centroid"],
                     "samples": samples[::sample_step].astype(np.float32),
                 }
             )
@@ -614,15 +639,20 @@ def _apply_semantic_chroma_consensus(
     targets: list[tuple[np.ndarray, np.ndarray]],
     strength: float,
     feather_sigma: float,
+    mix_cache: dict[int, np.ndarray],
 ) -> np.ndarray:
     if strength <= 0.0 or not targets:
         return ab
     output = ab.copy()
     for component_mask, target_ab in targets:
-        mix_mask = component_mask.astype(np.float32)
-        if feather_sigma > 0.0:
-            mix_mask = cv2.GaussianBlur(mix_mask, (0, 0), feather_sigma)
-        mix = np.clip(mix_mask * strength, 0.0, 1.0)[:, :, None]
+        cache_key = id(component_mask)
+        mix = mix_cache.get(cache_key)
+        if mix is None:
+            mix_mask = component_mask.astype(np.float32)
+            if feather_sigma > 0.0:
+                mix_mask = cv2.GaussianBlur(mix_mask, (0, 0), feather_sigma)
+            mix = np.clip(mix_mask * strength, 0.0, 1.0)[:, :, None]
+            mix_cache[cache_key] = mix
         output = (1.0 - mix) * output + mix * target_ab
     return output
 

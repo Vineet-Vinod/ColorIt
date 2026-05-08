@@ -11,6 +11,7 @@ from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import load_config
 from src.pipeline.ddcolor_clip import run_ddcolor_clip
 from src.pipeline.ffmpeg_utils import compress_video
+from src.pipeline.fast_semantic_movie import run_fast_semantic_movie
 from src.pipeline.inference import colorize_image_file
 from src.pipeline.manifest_stats import run_manifest_stats
 from src.pipeline.model_loader import load_colorizer_bundle
@@ -227,6 +228,78 @@ def build_parser() -> argparse.ArgumentParser:
     chroma_propagate_parser.add_argument("--overwrite", action="store_true")
     chroma_propagate_parser.set_defaults(handler=handle_model_chroma_propagate)
 
+    fast_semantic_parser = subparsers.add_parser(
+        "fast-semantic-movie",
+        help=argparse.SUPPRESS,
+    )
+    fast_semantic_parser.add_argument("--input", required=True, help="Input movie path.")
+    fast_semantic_parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional final output path. Defaults to the input path with '_fast_semantic_color' appended.",
+    )
+    fast_semantic_parser.add_argument("--ddcolor-repo", required=True)
+    fast_semantic_parser.add_argument("--weights", required=True)
+    fast_semantic_parser.add_argument(
+        "--work-dir",
+        default=None,
+        help="Intermediate artifact directory. Defaults under ~/ColorIt/data/fast_semantic_movie/.",
+    )
+    fast_semantic_parser.add_argument("--chunk-seconds", type=float, default=60.0)
+    fast_semantic_parser.add_argument("--limit-chunks", type=int, default=None)
+    fast_semantic_parser.add_argument("--ddcolor-input-size", type=int, default=256)
+    fast_semantic_parser.add_argument("--ddcolor-device", default="auto", choices=("auto", "cpu", "mps", "cuda"))
+    fast_semantic_parser.add_argument("--human-parser-model-id", default=None)
+    fast_semantic_parser.add_argument("--human-parser-device", default="auto", choices=("auto", "cpu", "mps"))
+    fast_semantic_parser.add_argument(
+        "--human-parser-frame-stride",
+        type=int,
+        default=8,
+        help="Fast default: run human-parser every N frames and reuse the mask between samples.",
+    )
+    fast_semantic_parser.add_argument(
+        "--propagation-mode",
+        choices=("flow", "model"),
+        default="model",
+        help="Fast default uses current-frame model chroma; flow is slower but more temporally conservative.",
+    )
+    fast_semantic_parser.add_argument("--keyframe-stride", type=int, default=35)
+    fast_semantic_parser.add_argument("--output-preset", default="ultrafast")
+    fast_semantic_parser.add_argument("--chroma-blend", type=float, default=1.0)
+    fast_semantic_parser.add_argument("--semantic-consensus-strength", type=float, default=0.92)
+    fast_semantic_parser.add_argument(
+        "--semantic-consensus-label",
+        action="append",
+        default=[],
+        help="Semantic garment label to use for consensus. Defaults to common clothing labels.",
+    )
+    fast_semantic_parser.add_argument(
+        "--semantic-protect-label",
+        action="append",
+        default=[],
+        help="Semantic label to subtract from garment masks. Defaults to face/hair/limbs.",
+    )
+    fast_semantic_parser.add_argument(
+        "--semantic-split-label",
+        action="append",
+        default=[],
+        help="Semantic label whose components split merged garment masks. Defaults to face/hair.",
+    )
+    fast_semantic_parser.add_argument("--no-compress", action="store_true")
+    fast_semantic_parser.add_argument("--max-workers", type=int, default=1)
+    fast_semantic_parser.add_argument("--propagation-workers", type=int, default=1)
+    fast_semantic_parser.add_argument("--compression-preset", default="veryfast")
+    fast_semantic_parser.add_argument(
+        "--compression-crf",
+        action="append",
+        type=int,
+        default=[],
+        help="Compression CRF to try. Can be passed multiple times. Defaults to 20, 23, 26, 28.",
+    )
+    fast_semantic_parser.add_argument("--max-size-multiplier", type=float, default=2.0)
+    fast_semantic_parser.add_argument("--overwrite", action="store_true")
+    fast_semantic_parser.set_defaults(handler=handle_fast_semantic_movie)
+
     movie_parser = subparsers.add_parser(
         "colorize-movie",
         help="Advanced full-movie command with tuning flags.",
@@ -317,6 +390,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="For human-parser, run model inference every N frames and reuse the last mask between samples.",
+    )
+    segment_parser.add_argument(
+        "--include-label",
+        action="append",
+        default=[],
+        help="For human-parser, only write these normalized labels to the manifest.",
     )
     segment_parser.add_argument("--min-area", type=int, default=3000)
     segment_parser.add_argument("--iou-threshold", type=float, default=0.10)
@@ -712,6 +791,38 @@ def handle_model_chroma_propagate(args: argparse.Namespace) -> int:
     )
 
 
+def handle_fast_semantic_movie(args: argparse.Namespace) -> int:
+    return run_fast_semantic_movie(
+        input_path=Path(args.input),
+        output_path=Path(args.output) if args.output else None,
+        ddcolor_repo_path=Path(args.ddcolor_repo),
+        weights_path=Path(args.weights),
+        work_dir=Path(args.work_dir) if args.work_dir else None,
+        chunk_seconds=float(args.chunk_seconds),
+        limit_chunks=args.limit_chunks,
+        ddcolor_input_size=int(args.ddcolor_input_size),
+        ddcolor_device=str(args.ddcolor_device),
+        human_parser_model_id=str(args.human_parser_model_id) if args.human_parser_model_id else None,
+        human_parser_device=str(args.human_parser_device),
+        human_parser_frame_stride=int(args.human_parser_frame_stride),
+        propagation_mode=str(args.propagation_mode),
+        keyframe_stride=int(args.keyframe_stride),
+        output_preset=str(args.output_preset),
+        chroma_blend=float(args.chroma_blend),
+        semantic_consensus_strength=float(args.semantic_consensus_strength),
+        semantic_consensus_labels=[str(label) for label in args.semantic_consensus_label],
+        semantic_protect_labels=[str(label) for label in args.semantic_protect_label],
+        semantic_split_labels=[str(label) for label in args.semantic_split_label],
+        max_workers=int(args.max_workers),
+        propagation_workers=int(args.propagation_workers),
+        compress=not bool(args.no_compress),
+        compression_preset=str(args.compression_preset),
+        compression_crfs=[int(value) for value in args.compression_crf] or [20, 23, 26, 28],
+        max_size_multiplier=float(args.max_size_multiplier),
+        overwrite=bool(args.overwrite),
+    )
+
+
 def handle_default_movie(args: argparse.Namespace) -> int:
     config_path = Path("configs/full_movie.yaml")
     config = load_config(config_path)
@@ -779,6 +890,7 @@ def handle_segment_clip(args: argparse.Namespace) -> int:
         model_id=args.model_id,
         device=str(args.device),
         frame_stride=int(args.frame_stride),
+        include_labels=[str(label) for label in args.include_label],
         score_threshold=float(args.score_threshold),
         mask_threshold=float(args.mask_threshold),
         min_area=int(args.min_area),
@@ -939,6 +1051,7 @@ def _looks_like_movie_path(value: str) -> bool:
         "colorize-clip",
         "ddcolor-clip",
         "model-chroma-propagate",
+        "fast-semantic-movie",
         "colorize-movie",
         "compress-video",
         "segment-clip",

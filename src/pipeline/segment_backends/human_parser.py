@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import threading
 from typing import Any
 
 import cv2
@@ -20,6 +21,7 @@ from src.pipeline.segments import (
 
 
 DEFAULT_HUMAN_PARSER_MODEL_ID = "models/segformer_b2_clothes"
+_MODEL_LOAD_LOCK = threading.Lock()
 
 
 def run_human_parser_segmentation(
@@ -29,10 +31,12 @@ def run_human_parser_segmentation(
     model_id: str,
     device: str,
     frame_stride: int,
+    include_labels: list[str] | None,
     overwrite: bool,
     skip_background: bool = True,
 ) -> SegmentManifest:
-    torch, auto_image_processor, auto_model = _load_transformers_dependencies()
+    with _MODEL_LOAD_LOCK:
+        torch, auto_image_processor, auto_model = _load_transformers_dependencies()
 
     input_path = input_path.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
@@ -50,11 +54,17 @@ def run_human_parser_segmentation(
 
     selected_device = _select_device(torch, device)
     model_source = _resolve_model_source(model_id)
-    processor = auto_image_processor.from_pretrained(model_source, trust_remote_code=False)
-    model = auto_model.from_pretrained(model_source, trust_remote_code=False)
+    with _MODEL_LOAD_LOCK:
+        processor = auto_image_processor.from_pretrained(model_source, trust_remote_code=False)
+        model = auto_model.from_pretrained(model_source, trust_remote_code=False)
     model.to(selected_device)
     model.eval()
     id_to_label = {int(key): str(value) for key, value in model.config.id2label.items()}
+    include_label_set = {
+        _normalize_label(label)
+        for label in (include_labels or [])
+        if label.strip()
+    }
 
     reader = open_rawvideo_reader(input_path=input_path)
     if reader.stdout is None or reader.stderr is None:
@@ -65,6 +75,7 @@ def run_human_parser_segmentation(
     frame_index = 0
     frame_stride = max(1, int(frame_stride))
     class_map: np.ndarray | None = None
+    cached_instances: list[SegmentInstance] = []
     try:
         while True:
             frame_data = reader.stdout.read(frame_bytes)
@@ -83,43 +94,16 @@ def run_human_parser_segmentation(
                     frame_rgb=frame_rgb,
                     device=selected_device,
                 )
-
-            instances: list[SegmentInstance] = []
-            for class_id in sorted(int(value) for value in np.unique(class_map)):
-                raw_label = id_to_label.get(class_id, str(class_id))
-                label = _normalize_label(raw_label)
-                if skip_background and label == "background":
-                    continue
-
-                mask = (class_map == class_id).astype(np.uint8) * 255
-                if not np.any(mask):
-                    continue
-
-                track_id = f"semantic_{class_id:02d}_{label}"
-                tracks.setdefault(
-                    track_id,
-                    SegmentTrack(
-                        track_id=track_id,
-                        label=label,
-                        kind="human_part",
-                    ),
+                cached_instances = _instances_from_class_map(
+                    class_map=class_map,
+                    frame_index=frame_index,
+                    id_to_label=id_to_label,
+                    include_label_set=include_label_set,
+                    output_dir=output_dir,
+                    tracks=tracks,
+                    skip_background=skip_background,
                 )
-
-                mask_path = output_dir / "masks" / f"frame_{frame_index:06d}_{track_id}.png"
-                mask_path.parent.mkdir(parents=True, exist_ok=True)
-                Image.fromarray(mask).save(mask_path)
-                instances.append(
-                    SegmentInstance(
-                        track_id=track_id,
-                        label=label,
-                        kind="human_part",
-                        mask_path=str(mask_path.relative_to(output_dir)),
-                        bbox=mask_bbox(mask),
-                        confidence=1.0,
-                    )
-                )
-
-            frames.append(SegmentFrame(frame_index=frame_index, instances=instances))
+            frames.append(SegmentFrame(frame_index=frame_index, instances=cached_instances))
             frame_index += 1
         reader_returncode = reader.wait()
     finally:
@@ -143,6 +127,55 @@ def run_human_parser_segmentation(
     )
     write_segment_manifest(output_dir / "segment_manifest.json", manifest)
     return manifest
+
+
+def _instances_from_class_map(
+    *,
+    class_map: np.ndarray,
+    frame_index: int,
+    id_to_label: dict[int, str],
+    include_label_set: set[str],
+    output_dir: Path,
+    tracks: dict[str, SegmentTrack],
+    skip_background: bool,
+) -> list[SegmentInstance]:
+    instances: list[SegmentInstance] = []
+    for class_id in sorted(int(value) for value in np.unique(class_map)):
+        raw_label = id_to_label.get(class_id, str(class_id))
+        label = _normalize_label(raw_label)
+        if skip_background and label == "background":
+            continue
+        if include_label_set and label not in include_label_set:
+            continue
+
+        mask = (class_map == class_id).astype(np.uint8) * 255
+        if not np.any(mask):
+            continue
+
+        track_id = f"semantic_{class_id:02d}_{label}"
+        tracks.setdefault(
+            track_id,
+            SegmentTrack(
+                track_id=track_id,
+                label=label,
+                kind="human_part",
+            ),
+        )
+
+        mask_path = output_dir / "masks" / f"frame_{frame_index:06d}_{track_id}.png"
+        mask_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(mask).save(mask_path)
+        instances.append(
+            SegmentInstance(
+                track_id=track_id,
+                label=label,
+                kind="human_part",
+                mask_path=str(mask_path.relative_to(output_dir)),
+                bbox=mask_bbox(mask),
+                confidence=1.0,
+            )
+        )
+    return instances
 
 
 def _predict_class_map(

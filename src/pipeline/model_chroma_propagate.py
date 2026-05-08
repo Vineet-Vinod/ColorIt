@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import cv2
@@ -29,9 +30,25 @@ def run_model_chroma_propagate(
     dark_fill_luma_end: float,
     dark_fill_chroma_end: float,
     dark_fill_sigma: float,
+    model_fill_strength: float,
+    model_fill_chroma_end: float,
+    model_fill_disagreement_start: float,
+    model_fill_disagreement_end: float,
+    model_fill_blur_sigma: float,
+    model_fill_chroma_floor: float,
+    component_fill_strength: float,
+    component_fill_luma_end: float,
+    component_fill_min_area: int,
+    component_fill_model_chroma_min: float,
     blue_suppress_strength: float,
     blue_suppress_hue_start: float,
     blue_suppress_hue_end: float,
+    semantic_consensus_manifest_path: Path | None,
+    semantic_consensus_labels: list[str],
+    semantic_consensus_strength: float,
+    semantic_consensus_min_area: int,
+    semantic_consensus_model_chroma_min: float,
+    semantic_consensus_feather_sigma: float,
     overwrite: bool,
 ) -> int:
     source_path = source_path.expanduser().resolve()
@@ -59,6 +76,13 @@ def run_model_chroma_propagate(
     model_frames = model_frames[:frame_count]
     if frame_count == 0:
         raise ValueError("No frames available for chroma propagation.")
+    semantic_masks_by_frame = _load_semantic_consensus_masks(
+        manifest_path=semantic_consensus_manifest_path,
+        labels=semantic_consensus_labels,
+        frame_count=frame_count,
+        width=width,
+        height=height,
+    )
 
     keyframe_indices = list(range(0, frame_count, max(1, keyframe_stride)))
     cut_indices = _detect_scene_cuts(
@@ -87,9 +111,24 @@ def run_model_chroma_propagate(
         dark_fill_luma_end=dark_fill_luma_end,
         dark_fill_chroma_end=dark_fill_chroma_end,
         dark_fill_sigma=dark_fill_sigma,
+        model_fill_strength=model_fill_strength,
+        model_fill_chroma_end=model_fill_chroma_end,
+        model_fill_disagreement_start=model_fill_disagreement_start,
+        model_fill_disagreement_end=model_fill_disagreement_end,
+        model_fill_blur_sigma=model_fill_blur_sigma,
+        model_fill_chroma_floor=model_fill_chroma_floor,
+        component_fill_strength=component_fill_strength,
+        component_fill_luma_end=component_fill_luma_end,
+        component_fill_min_area=component_fill_min_area,
+        component_fill_model_chroma_min=component_fill_model_chroma_min,
         blue_suppress_strength=blue_suppress_strength,
         blue_suppress_hue_start=blue_suppress_hue_start,
         blue_suppress_hue_end=blue_suppress_hue_end,
+        semantic_masks_by_frame=semantic_masks_by_frame,
+        semantic_consensus_strength=semantic_consensus_strength,
+        semantic_consensus_min_area=semantic_consensus_min_area,
+        semantic_consensus_model_chroma_min=semantic_consensus_model_chroma_min,
+        semantic_consensus_feather_sigma=semantic_consensus_feather_sigma,
     )
     _write_frames(
         output_path=output_path,
@@ -124,9 +163,24 @@ def _propagate_chroma(
     dark_fill_luma_end: float,
     dark_fill_chroma_end: float,
     dark_fill_sigma: float,
+    model_fill_strength: float,
+    model_fill_chroma_end: float,
+    model_fill_disagreement_start: float,
+    model_fill_disagreement_end: float,
+    model_fill_blur_sigma: float,
+    model_fill_chroma_floor: float,
+    component_fill_strength: float,
+    component_fill_luma_end: float,
+    component_fill_min_area: int,
+    component_fill_model_chroma_min: float,
     blue_suppress_strength: float,
     blue_suppress_hue_start: float,
     blue_suppress_hue_end: float,
+    semantic_masks_by_frame: list[list[np.ndarray]],
+    semantic_consensus_strength: float,
+    semantic_consensus_min_area: int,
+    semantic_consensus_model_chroma_min: float,
+    semantic_consensus_feather_sigma: float,
 ) -> list[np.ndarray]:
     if fallback_uncertainty not in {"ab-delta", "hue"}:
         raise ValueError(f"Unsupported fallback uncertainty mode: {fallback_uncertainty}")
@@ -160,6 +214,7 @@ def _propagate_chroma(
         right_key = min(index for index in keyframe_indices if index >= frame_index)
         if left_key == right_key:
             propagated_ab = model_ab_by_key[left_key]
+            disagreement = None
         else:
             t = (frame_index - left_key) / max(right_key - left_key, 1)
             forward = forward_ab[frame_index]
@@ -171,6 +226,38 @@ def _propagate_chroma(
                 uncertainty = cv2.GaussianBlur(uncertainty.astype(np.float32), (0, 0), 2.0)
                 fallback_mix = np.clip(uncertainty * fallback_strength, 0.0, 1.0)[:, :, None]
                 propagated_ab = (1.0 - fallback_mix) * propagated_ab + fallback_mix * fallback_ab
+            else:
+                disagreement = _chroma_disagreement(forward=forward, backward=backward, mode=fallback_uncertainty)
+        model_ab = cv2.cvtColor(model_frames[frame_index], cv2.COLOR_RGB2LAB)[:, :, 1:3].astype(np.float32)
+        propagated_ab = _fill_from_model_chroma(
+            propagated_ab,
+            model_ab=model_ab,
+            disagreement=disagreement,
+            strength=model_fill_strength,
+            chroma_end=model_fill_chroma_end,
+            disagreement_start=model_fill_disagreement_start,
+            disagreement_end=model_fill_disagreement_end,
+            blur_sigma=model_fill_blur_sigma,
+            chroma_floor=model_fill_chroma_floor,
+        )
+        propagated_ab = _fill_dark_components_from_model(
+            propagated_ab,
+            model_ab=model_ab,
+            source_l=source_l[frame_index],
+            strength=component_fill_strength,
+            luma_end=component_fill_luma_end,
+            min_area=component_fill_min_area,
+            model_chroma_min=component_fill_model_chroma_min,
+        )
+        propagated_ab = _apply_semantic_chroma_consensus(
+            propagated_ab,
+            model_ab=model_ab,
+            masks=semantic_masks_by_frame[frame_index],
+            strength=semantic_consensus_strength,
+            min_area=semantic_consensus_min_area,
+            model_chroma_min=semantic_consensus_model_chroma_min,
+            feather_sigma=semantic_consensus_feather_sigma,
+        )
         propagated_ab = _smooth_ab(
             propagated_ab,
             diameter=chroma_smooth_diameter,
@@ -199,6 +286,71 @@ def _propagate_chroma(
         output_rgb = cv2.cvtColor(np.clip(output_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
         output_frames.append(output_rgb)
     return output_frames
+
+
+def _load_semantic_consensus_masks(
+    *,
+    manifest_path: Path | None,
+    labels: list[str],
+    frame_count: int,
+    width: int,
+    height: int,
+) -> list[list[np.ndarray]]:
+    masks_by_frame: list[list[np.ndarray]] = [[] for _ in range(frame_count)]
+    if manifest_path is None:
+        return masks_by_frame
+    manifest_path = manifest_path.expanduser().resolve()
+    manifest = json.loads(manifest_path.read_text())
+    manifest_dir = manifest_path.parent
+    label_set = {label.strip() for label in labels if label.strip()}
+    for frame in manifest.get("frames", [])[:frame_count]:
+        frame_index = int(frame["frame_index"])
+        if frame_index >= frame_count:
+            continue
+        for instance in frame.get("instances", []):
+            if label_set and instance.get("label") not in label_set:
+                continue
+            mask_path = manifest_dir / str(instance["mask_path"])
+            mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+            if mask is None:
+                raise FileNotFoundError(f"Semantic mask not found: {mask_path}")
+            if mask.shape[:2] != (height, width):
+                mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
+            masks_by_frame[frame_index].append(mask >= 128)
+    return masks_by_frame
+
+
+def _apply_semantic_chroma_consensus(
+    ab: np.ndarray,
+    *,
+    model_ab: np.ndarray,
+    masks: list[np.ndarray],
+    strength: float,
+    min_area: int,
+    model_chroma_min: float,
+    feather_sigma: float,
+) -> np.ndarray:
+    if strength <= 0.0 or not masks:
+        return ab
+    output = ab.copy()
+    model_chroma = np.linalg.norm(model_ab - 128.0, axis=2)
+    for mask in masks:
+        component_count, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
+        for component_index in range(1, component_count):
+            area = int(stats[component_index, cv2.CC_STAT_AREA])
+            if area < min_area:
+                continue
+            component_mask = labels == component_index
+            confident_mask = component_mask & (model_chroma >= model_chroma_min)
+            if int(np.count_nonzero(confident_mask)) < max(20, min_area // 20):
+                continue
+            target_ab = np.median(model_ab[confident_mask], axis=0).astype(np.float32)
+            mix_mask = component_mask.astype(np.float32)
+            if feather_sigma > 0.0:
+                mix_mask = cv2.GaussianBlur(mix_mask, (0, 0), feather_sigma)
+            mix = np.clip(mix_mask * strength, 0.0, 1.0)[:, :, None]
+            output = (1.0 - mix) * output + mix * target_ab
+    return output
 
 
 def _detect_scene_cuts(*, source_frames: list[np.ndarray], threshold: float, keyframe_window: int) -> list[int]:
@@ -230,6 +382,80 @@ def _smooth_ab(ab: np.ndarray, *, diameter: int, sigma_color: float, sigma_space
         for channel in range(2)
     ]
     return np.stack(channels, axis=2)
+
+
+def _fill_from_model_chroma(
+    ab: np.ndarray,
+    *,
+    model_ab: np.ndarray,
+    disagreement: np.ndarray | None,
+    strength: float,
+    chroma_end: float,
+    disagreement_start: float,
+    disagreement_end: float,
+    blur_sigma: float,
+    chroma_floor: float,
+) -> np.ndarray:
+    if strength <= 0.0:
+        return ab
+    propagated_chroma = np.linalg.norm(ab - 128.0, axis=2)
+    model_chroma = np.linalg.norm(model_ab - 128.0, axis=2)
+    model_fill_ab = model_ab
+    if chroma_floor > 0.0:
+        centered = model_ab - 128.0
+        chroma_safe = np.maximum(model_chroma, 1e-3)
+        boosted_chroma = np.maximum(model_chroma, chroma_floor)
+        model_fill_ab = 128.0 + centered * (boosted_chroma / chroma_safe)[:, :, None]
+    weak_mask = 1.0 - _smoothstep(max(chroma_end - 16.0, 0.0), chroma_end, propagated_chroma)
+    model_confident = _smoothstep(max(chroma_end - 18.0, 0.0), chroma_end + 18.0, model_chroma)
+    if disagreement is None:
+        uncertainty = weak_mask
+    else:
+        uncertainty = np.maximum(
+            weak_mask,
+            _smoothstep(disagreement_start, disagreement_end, disagreement),
+        )
+    mask = uncertainty * model_confident
+    if blur_sigma > 0.0:
+        mask = cv2.GaussianBlur(mask.astype(np.float32), (0, 0), blur_sigma)
+    mix = np.clip(mask * strength, 0.0, 1.0)[:, :, None]
+    return (1.0 - mix) * ab + mix * model_fill_ab
+
+
+def _fill_dark_components_from_model(
+    ab: np.ndarray,
+    *,
+    model_ab: np.ndarray,
+    source_l: np.ndarray,
+    strength: float,
+    luma_end: float,
+    min_area: int,
+    model_chroma_min: float,
+) -> np.ndarray:
+    if strength <= 0.0:
+        return ab
+    dark_mask = (source_l[:, :, 0] <= luma_end).astype(np.uint8)
+    if not np.any(dark_mask):
+        return ab
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(dark_mask, connectivity=8)
+    output = ab.copy()
+    model_centered = model_ab - 128.0
+    model_chroma = np.linalg.norm(model_centered, axis=2)
+    for component_index in range(1, component_count):
+        area = int(stats[component_index, cv2.CC_STAT_AREA])
+        if area < min_area:
+            continue
+        component_mask = labels == component_index
+        confident_mask = component_mask & (model_chroma >= model_chroma_min)
+        if int(np.count_nonzero(confident_mask)) < max(25, min_area // 30):
+            continue
+        target_ab = np.median(model_ab[confident_mask], axis=0).astype(np.float32)
+        component_mix = np.zeros(labels.shape, dtype=np.float32)
+        component_mix[component_mask] = strength
+        component_mix = cv2.GaussianBlur(component_mix, (0, 0), 1.2)
+        mix = np.clip(component_mix, 0.0, 1.0)[:, :, None]
+        output = (1.0 - mix) * output + mix * target_ab
+    return output
 
 
 def _fill_dark_low_chroma(

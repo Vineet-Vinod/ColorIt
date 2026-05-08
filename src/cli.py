@@ -154,6 +154,31 @@ def build_parser() -> argparse.ArgumentParser:
     chroma_propagate_parser.add_argument("--dark-fill-chroma-end", type=float, default=22.0)
     chroma_propagate_parser.add_argument("--dark-fill-sigma", type=float, default=8.0)
     chroma_propagate_parser.add_argument(
+        "--model-fill-strength",
+        type=float,
+        default=0.0,
+        help="Use current-frame model chroma to repair weak or uncertain propagated chroma. Disabled by default.",
+    )
+    chroma_propagate_parser.add_argument("--model-fill-chroma-end", type=float, default=28.0)
+    chroma_propagate_parser.add_argument("--model-fill-disagreement-start", type=float, default=25.0)
+    chroma_propagate_parser.add_argument("--model-fill-disagreement-end", type=float, default=80.0)
+    chroma_propagate_parser.add_argument("--model-fill-blur-sigma", type=float, default=1.5)
+    chroma_propagate_parser.add_argument(
+        "--model-fill-chroma-floor",
+        type=float,
+        default=0.0,
+        help="Minimum Lab chroma magnitude for model-fill repair. Disabled by default.",
+    )
+    chroma_propagate_parser.add_argument(
+        "--component-fill-strength",
+        type=float,
+        default=0.0,
+        help="Force connected dark regions toward their median current-frame model chroma. Disabled by default.",
+    )
+    chroma_propagate_parser.add_argument("--component-fill-luma-end", type=float, default=100.0)
+    chroma_propagate_parser.add_argument("--component-fill-min-area", type=int, default=1800)
+    chroma_propagate_parser.add_argument("--component-fill-model-chroma-min", type=float, default=14.0)
+    chroma_propagate_parser.add_argument(
         "--blue-suppress-strength",
         type=float,
         default=0.0,
@@ -161,6 +186,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     chroma_propagate_parser.add_argument("--blue-suppress-hue-start", type=float, default=85.0)
     chroma_propagate_parser.add_argument("--blue-suppress-hue-end", type=float, default=132.0)
+    chroma_propagate_parser.add_argument(
+        "--semantic-consensus-manifest",
+        default=None,
+        help="Optional human-parser segment manifest used for garment-region chroma consensus.",
+    )
+    chroma_propagate_parser.add_argument(
+        "--semantic-consensus-label",
+        action="append",
+        default=[],
+        help="Semantic garment label to use for consensus. Can be passed multiple times.",
+    )
+    chroma_propagate_parser.add_argument("--semantic-consensus-strength", type=float, default=0.0)
+    chroma_propagate_parser.add_argument("--semantic-consensus-min-area", type=int, default=700)
+    chroma_propagate_parser.add_argument("--semantic-consensus-model-chroma-min", type=float, default=10.0)
+    chroma_propagate_parser.add_argument("--semantic-consensus-feather-sigma", type=float, default=1.2)
     chroma_propagate_parser.add_argument("--overwrite", action="store_true")
     chroma_propagate_parser.set_defaults(handler=handle_model_chroma_propagate)
 
@@ -610,9 +650,27 @@ def handle_model_chroma_propagate(args: argparse.Namespace) -> int:
         dark_fill_luma_end=float(args.dark_fill_luma_end),
         dark_fill_chroma_end=float(args.dark_fill_chroma_end),
         dark_fill_sigma=float(args.dark_fill_sigma),
+        model_fill_strength=float(args.model_fill_strength),
+        model_fill_chroma_end=float(args.model_fill_chroma_end),
+        model_fill_disagreement_start=float(args.model_fill_disagreement_start),
+        model_fill_disagreement_end=float(args.model_fill_disagreement_end),
+        model_fill_blur_sigma=float(args.model_fill_blur_sigma),
+        model_fill_chroma_floor=float(args.model_fill_chroma_floor),
+        component_fill_strength=float(args.component_fill_strength),
+        component_fill_luma_end=float(args.component_fill_luma_end),
+        component_fill_min_area=int(args.component_fill_min_area),
+        component_fill_model_chroma_min=float(args.component_fill_model_chroma_min),
         blue_suppress_strength=float(args.blue_suppress_strength),
         blue_suppress_hue_start=float(args.blue_suppress_hue_start),
         blue_suppress_hue_end=float(args.blue_suppress_hue_end),
+        semantic_consensus_manifest_path=Path(args.semantic_consensus_manifest)
+        if args.semantic_consensus_manifest
+        else None,
+        semantic_consensus_labels=[str(label) for label in args.semantic_consensus_label],
+        semantic_consensus_strength=float(args.semantic_consensus_strength),
+        semantic_consensus_min_area=int(args.semantic_consensus_min_area),
+        semantic_consensus_model_chroma_min=float(args.semantic_consensus_model_chroma_min),
+        semantic_consensus_feather_sigma=float(args.semantic_consensus_feather_sigma),
         overwrite=bool(args.overwrite),
     )
 

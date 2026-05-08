@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import sys
 import time
 
 import cv2
@@ -9,13 +8,16 @@ import numpy as np
 import torch
 
 from src.pipeline.ffmpeg_utils import ffprobe_media, open_rawvideo_reader, open_rawvideo_writer
+from src.vendor.ddcolor import DDColor, ColorizationPipeline, build_ddcolor_model
+
+
+DEFAULT_DDCOLOR_WEIGHTS_PATH = Path("models/ddcolor/pytorch_model.bin")
 
 
 def run_ddcolor_clip(
     *,
     input_path: Path,
     output_path: Path,
-    ddcolor_repo_path: Path,
     weights_path: Path,
     input_size: int,
     device: str,
@@ -24,24 +26,18 @@ def run_ddcolor_clip(
 ) -> int:
     input_path = input_path.expanduser().resolve()
     output_path = output_path.expanduser().resolve()
-    ddcolor_repo_path = ddcolor_repo_path.expanduser().resolve()
     weights_path = weights_path.expanduser().resolve()
     if not input_path.exists():
         raise FileNotFoundError(f"Input clip not found: {input_path}")
-    if not ddcolor_repo_path.exists():
-        raise FileNotFoundError(f"DDColor repo path not found: {ddcolor_repo_path}")
     if not weights_path.exists():
         raise FileNotFoundError(f"DDColor weights not found: {weights_path}")
     if output_path.exists() and not overwrite:
         raise FileExistsError(f"Output already exists: {output_path}. Use --overwrite to replace it.")
 
-    _add_import_path(ddcolor_repo_path)
-    from ddcolor import DDColor, ColorizationPipeline, build_ddcolor_model
-
     selected_device = _select_device(device)
     print(f"Input clip: {input_path}")
     print(f"Output clip: {output_path}")
-    print(f"DDColor repo: {ddcolor_repo_path}")
+    print("DDColor backend: vendored inference")
     print(f"Device: {selected_device}")
     print(f"Input size: {input_size}")
 
@@ -115,14 +111,6 @@ def run_ddcolor_clip(
     print(f"Frames: {frame_index}")
     print(f"Runtime seconds: {runtime:.2f}")
     return 0
-
-
-def _add_import_path(path: Path) -> None:
-    value = str(path)
-    if value not in sys.path:
-        sys.path.insert(0, value)
-
-
 def _select_device(device: str) -> torch.device:
     if device == "auto":
         if torch.backends.mps.is_available():

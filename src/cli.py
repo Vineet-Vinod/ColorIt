@@ -9,7 +9,7 @@ from src.pipeline.actor_stitch import run_stitch_actors
 from src.pipeline.auto_costume_track import run_auto_costume_track
 from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import load_config
-from src.pipeline.ddcolor_clip import run_ddcolor_clip
+from src.pipeline.ddcolor_clip import DEFAULT_DDCOLOR_WEIGHTS_PATH, run_ddcolor_clip
 from src.pipeline.ffmpeg_utils import compress_video
 from src.pipeline.fast_semantic_movie import run_fast_semantic_movie
 from src.pipeline.inference import colorize_image_file
@@ -95,8 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ddcolor_parser.add_argument("--input", required=True)
     ddcolor_parser.add_argument("--output", required=True)
-    ddcolor_parser.add_argument("--ddcolor-repo", required=True)
-    ddcolor_parser.add_argument("--weights", required=True)
+    ddcolor_parser.add_argument("--weights", default=str(DEFAULT_DDCOLOR_WEIGHTS_PATH))
     ddcolor_parser.add_argument("--input-size", type=int, default=512)
     ddcolor_parser.add_argument("--device", default="auto", choices=("auto", "cpu", "mps", "cuda"))
     ddcolor_parser.add_argument("--output-preset", default="medium")
@@ -238,8 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional final output path. Defaults to the input path with '_fast_semantic_color' appended.",
     )
-    fast_semantic_parser.add_argument("--ddcolor-repo", required=True)
-    fast_semantic_parser.add_argument("--weights", required=True)
+    fast_semantic_parser.add_argument("--weights", default=str(DEFAULT_DDCOLOR_WEIGHTS_PATH))
     fast_semantic_parser.add_argument(
         "--work-dir",
         default=None,
@@ -729,7 +727,6 @@ def handle_ddcolor_clip(args: argparse.Namespace) -> int:
     return run_ddcolor_clip(
         input_path=Path(args.input),
         output_path=Path(args.output),
-        ddcolor_repo_path=Path(args.ddcolor_repo),
         weights_path=Path(args.weights),
         input_size=int(args.input_size),
         device=str(args.device),
@@ -795,7 +792,6 @@ def handle_fast_semantic_movie(args: argparse.Namespace) -> int:
     return run_fast_semantic_movie(
         input_path=Path(args.input),
         output_path=Path(args.output) if args.output else None,
-        ddcolor_repo_path=Path(args.ddcolor_repo),
         weights_path=Path(args.weights),
         work_dir=Path(args.work_dir) if args.work_dir else None,
         chunk_seconds=float(args.chunk_seconds),

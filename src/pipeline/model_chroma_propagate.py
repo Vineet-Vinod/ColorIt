@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import cv2
 import numpy as np
@@ -42,13 +43,10 @@ def run_model_chroma_propagate(
     if frame_count == 0:
         raise ValueError("No frames available for chroma propagation.")
 
-    keyframe_indices = list(range(0, frame_count, max(1, keyframe_stride)))
-    if keyframe_indices[-1] != frame_count - 1:
-        keyframe_indices.append(frame_count - 1)
+    started = time.perf_counter()
     output_frames = _propagate_chroma(
         source_frames=source_frames,
         model_frames=model_frames,
-        keyframe_indices=keyframe_indices,
         chroma_blend=chroma_blend,
     )
     _write_frames(
@@ -61,7 +59,8 @@ def run_model_chroma_propagate(
     )
     print(f"Model chroma propagation written: {output_path}")
     print(f"Frames: {frame_count}")
-    print(f"Keyframes: {len(keyframe_indices)}")
+    print("Chroma mode: direct")
+    print(f"Runtime seconds: {time.perf_counter() - started:.2f}")
     return 0
 
 
@@ -69,78 +68,21 @@ def _propagate_chroma(
     *,
     source_frames: list[np.ndarray],
     model_frames: list[np.ndarray],
-    keyframe_indices: list[int],
     chroma_blend: float,
 ) -> list[np.ndarray]:
-    source_gray = [cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY) for frame in source_frames]
-    source_l = [cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)[:, :, :1].astype(np.float32) for frame in source_frames]
-    model_ab_by_key = {
-        index: cv2.cvtColor(model_frames[index], cv2.COLOR_RGB2LAB)[:, :, 1:3].astype(np.float32)
-        for index in keyframe_indices
-    }
-
-    forward_ab: dict[int, np.ndarray] = {}
-    for start, end in zip(keyframe_indices, keyframe_indices[1:]):
-        ab = model_ab_by_key[start]
-        forward_ab[start] = ab
-        for frame_index in range(start + 1, end + 1):
-            ab = _warp_ab(previous_ab=ab, previous_gray=source_gray[frame_index - 1], current_gray=source_gray[frame_index])
-            forward_ab[frame_index] = ab
-
-    backward_ab: dict[int, np.ndarray] = {}
-    for start, end in zip(reversed(keyframe_indices[:-1]), reversed(keyframe_indices[1:])):
-        ab = model_ab_by_key[end]
-        backward_ab[end] = ab
-        for frame_index in range(end - 1, start - 1, -1):
-            ab = _warp_ab(previous_ab=ab, previous_gray=source_gray[frame_index + 1], current_gray=source_gray[frame_index])
-            backward_ab[frame_index] = ab
-
     output_frames: list[np.ndarray] = []
     blend = float(np.clip(chroma_blend, 0.0, 1.0))
-    for frame_index in range(len(source_frames)):
-        left_key = max(index for index in keyframe_indices if index <= frame_index)
-        right_key = min(index for index in keyframe_indices if index >= frame_index)
-        if left_key == right_key:
-            propagated_ab = model_ab_by_key[left_key]
+    for source_frame, model_frame in zip(source_frames, model_frames):
+        source_lab = cv2.cvtColor(source_frame, cv2.COLOR_RGB2LAB)
+        model_ab = cv2.cvtColor(model_frame, cv2.COLOR_RGB2LAB)[:, :, 1:3]
+        if blend >= 1.0:
+            source_lab[:, :, 1:3] = model_ab
         else:
-            t = (frame_index - left_key) / max(right_key - left_key, 1)
-            propagated_ab = (1.0 - t) * forward_ab[frame_index] + t * backward_ab[frame_index]
-        deoldify_ab = cv2.cvtColor(source_frames[frame_index], cv2.COLOR_RGB2LAB)[:, :, 1:3].astype(np.float32)
-        output_ab = (1.0 - blend) * deoldify_ab + blend * propagated_ab
-        output_lab = np.concatenate([source_l[frame_index], output_ab], axis=2)
-        output_rgb = cv2.cvtColor(np.clip(output_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
-        output_frames.append(output_rgb)
+            source_ab = source_lab[:, :, 1:3].astype(np.float32)
+            output_ab = (1.0 - blend) * source_ab + blend * model_ab.astype(np.float32)
+            source_lab[:, :, 1:3] = np.clip(output_ab, 0, 255).astype(np.uint8)
+        output_frames.append(cv2.cvtColor(source_lab, cv2.COLOR_LAB2RGB))
     return output_frames
-
-
-def _warp_ab(*, previous_ab: np.ndarray, previous_gray: np.ndarray, current_gray: np.ndarray) -> np.ndarray:
-    current_to_previous_flow = cv2.calcOpticalFlowFarneback(
-        current_gray,
-        previous_gray,
-        None,
-        0.5,
-        3,
-        21,
-        3,
-        5,
-        1.2,
-        0,
-    )
-    height, width = current_gray.shape[:2]
-    grid_x, grid_y = np.meshgrid(np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32))
-    map_x = grid_x + current_to_previous_flow[:, :, 0]
-    map_y = grid_y + current_to_previous_flow[:, :, 1]
-    channels = [
-        cv2.remap(
-            previous_ab[:, :, channel],
-            map_x,
-            map_y,
-            interpolation=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_REPLICATE,
-        )
-        for channel in range(2)
-    ]
-    return np.stack(channels, axis=2)
 
 
 def _read_frames(path: Path, *, width: int, height: int) -> list[np.ndarray]:

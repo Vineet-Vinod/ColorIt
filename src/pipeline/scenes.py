@@ -115,7 +115,7 @@ def detect_scene_boundaries(
         end = boundaries[index + 1]
         if end - start >= min_scene_seconds:
             pairs.append((start, end))
-    return pairs
+    return pairs or [(0.0, movie_duration_seconds)]
 
 
 def split_scenes(

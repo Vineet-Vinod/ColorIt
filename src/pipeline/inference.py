@@ -17,7 +17,6 @@ def colorize_image_file(
     input_path: Path,
     output_path: Path,
     render_factor: int,
-    postprocess_config: dict | None = None,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     input_image = Image.open(input_path).convert("RGB")
@@ -25,7 +24,6 @@ def colorize_image_file(
         model_bundle=model_bundle,
         input_rgbs=[np.asarray(input_image)],
         render_factor=render_factor,
-        postprocess_config=postprocess_config,
     )
     Image.fromarray(result[0]).save(output_path)
 
@@ -35,7 +33,6 @@ def colorize_rgb_batch(
     model_bundle: ModelBundle,
     input_rgbs: list[np.ndarray],
     render_factor: int,
-    postprocess_config: dict | None = None,
 ) -> list[np.ndarray]:
     if not input_rgbs:
         return []
@@ -70,7 +67,6 @@ def colorize_rgb_batch(
                 raw_color_tensor=output,
                 orig_np=input_rgb,
                 output_size=output_size,
-                postprocess_config=postprocess_config or {},
             )
         )
     return results
@@ -81,7 +77,6 @@ def _post_process_tensor(
     raw_color_tensor: torch.Tensor,
     orig_np: np.ndarray,
     output_size: tuple[int, int],
-    postprocess_config: dict,
 ) -> np.ndarray:
     upsampled = F.interpolate(
         raw_color_tensor.unsqueeze(0),
@@ -100,8 +95,7 @@ def _post_process_tensor(
 
     final_tensor = _transfer_chroma_tensor(orig_tensor=orig_tensor, color_tensor=upsampled)
     final_tensor = final_tensor.clamp(0.0, 1.0).permute(1, 2, 0)
-    final_np = (final_tensor.cpu().numpy() * 255.0).astype(np.uint8)
-    return _apply_color_bias(final_np, postprocess_config)
+    return (final_tensor.cpu().numpy() * 255.0).astype(np.uint8)
 
 
 def _transfer_chroma_tensor(
@@ -118,34 +112,3 @@ def _transfer_chroma_tensor(
     rgb[1] = y - 0.39465 * u - 0.58060 * v
     rgb[2] = y + 2.03211 * u
     return rgb
-
-
-def _apply_color_bias(image_rgb: np.ndarray, postprocess_config: dict) -> np.ndarray:
-    warmth = float(postprocess_config.get("warmth", 0.0))
-    shadow_warmth = float(postprocess_config.get("shadow_warmth", 0.0))
-    blue_reduction = float(postprocess_config.get("blue_reduction", 0.0))
-
-    if warmth == 0.0 and shadow_warmth == 0.0 and blue_reduction == 0.0:
-        return image_rgb
-
-    lab = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
-    l_channel, a_channel, b_channel = cv2.split(lab)
-
-    luminance = l_channel / 255.0
-    warm_weight = warmth + shadow_warmth * (1.0 - luminance)
-
-    a_channel = a_channel + (8.0 * warm_weight)
-    b_channel = b_channel + (16.0 * warm_weight)
-
-    if blue_reduction > 0.0:
-        blue_amount = np.clip(128.0 - b_channel, 0.0, None)
-        b_channel = b_channel + blue_amount * blue_reduction
-
-    adjusted = cv2.merge(
-        [
-            np.clip(l_channel, 0.0, 255.0),
-            np.clip(a_channel, 0.0, 255.0),
-            np.clip(b_channel, 0.0, 255.0),
-        ]
-    ).astype(np.uint8)
-    return cv2.cvtColor(adjusted, cv2.COLOR_LAB2RGB)

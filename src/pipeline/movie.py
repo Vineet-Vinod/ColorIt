@@ -60,7 +60,7 @@ def run_colorize_movie(
     write_json_manifest(movie_run_manifest_path, movie_run_manifest)
 
     try:
-        if _can_resume_scene_manifest(
+        if not overwrite and _can_resume_scene_manifest(
             scene_manifest_path=scene_manifest_path,
             movie_path=movie_path,
             config=config,
@@ -100,12 +100,7 @@ def run_colorize_movie(
         write_json_manifest(movie_run_manifest_path, movie_run_manifest)
 
         compression_config = config.compression
-        compression_enabled = bool(compression_config.get("enabled", True))
-        assembly_output_path = (
-            paths.final_dir / f"{run_id}_assembly_work{output_path.suffix}"
-            if compression_enabled
-            else output_path
-        )
+        assembly_output_path = paths.final_dir / f"{run_id}_assembly_work{output_path.suffix}"
 
         _mark_movie_stage(movie_run_manifest, stage="assembly", status="running")
         write_json_manifest(movie_run_manifest_path, movie_run_manifest)
@@ -117,21 +112,20 @@ def run_colorize_movie(
         )
         _mark_movie_stage(movie_run_manifest, stage="assembly", status="succeeded")
 
-        if compression_enabled:
-            _mark_movie_stage(movie_run_manifest, stage="compression", status="running")
-            write_json_manifest(movie_run_manifest_path, movie_run_manifest)
-            compression_result = _compress_final_movie(
-                input_path=assembly_output_path,
-                output_path=output_path,
-                source_movie_path=movie_path,
-                compression_config=compression_config,
-            )
-            _mark_movie_stage(
-                movie_run_manifest,
-                stage="compression",
-                status="succeeded",
-                **compression_result,
-            )
+        _mark_movie_stage(movie_run_manifest, stage="compression", status="running")
+        write_json_manifest(movie_run_manifest_path, movie_run_manifest)
+        compression_result = _compress_final_movie(
+            input_path=assembly_output_path,
+            output_path=output_path,
+            source_movie_path=movie_path,
+            compression_config=compression_config,
+        )
+        _mark_movie_stage(
+            movie_run_manifest,
+            stage="compression",
+            status="succeeded",
+            **compression_result,
+        )
 
         movie_run_manifest["status"] = "succeeded"
         movie_run_manifest["updated_at"] = utc_now_iso()

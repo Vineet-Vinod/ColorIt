@@ -29,6 +29,16 @@ DEFAULT_SEMANTIC_CONSENSUS_LABELS = [
 ]
 DEFAULT_SEMANTIC_PROTECT_LABELS = ["face", "hair", "left_arm", "right_arm", "left_leg", "right_leg"]
 DEFAULT_SEMANTIC_SPLIT_LABELS = ["face", "hair"]
+DDCOLOR_INPUT_SIZE = 256
+MODEL_DEVICE = "auto"
+HUMAN_PARSER_FRAME_STRIDE = 8
+OUTPUT_PRESET = "ultrafast"
+SEMANTIC_CONSENSUS_STRENGTH = 0.92
+PREP_WORKERS = 1
+PROPAGATION_WORKERS = 1
+COMPRESSION_PRESET = "veryfast"
+COMPRESSION_CRFS = [20, 23, 26, 28]
+MAX_SIZE_MULTIPLIER = 2.0
 
 
 @dataclass(frozen=True)
@@ -65,25 +75,6 @@ def run_fast_semantic_movie(
     work_dir: Path | None,
     chunk_seconds: float,
     limit_chunks: int | None,
-    ddcolor_input_size: int,
-    ddcolor_device: str,
-    human_parser_model_id: str | None,
-    human_parser_device: str,
-    human_parser_frame_stride: int,
-    propagation_mode: str,
-    keyframe_stride: int,
-    output_preset: str,
-    chroma_blend: float,
-    semantic_consensus_strength: float,
-    semantic_consensus_labels: list[str],
-    semantic_protect_labels: list[str],
-    semantic_split_labels: list[str],
-    max_workers: int,
-    propagation_workers: int,
-    compress: bool,
-    compression_preset: str,
-    compression_crfs: list[int],
-    max_size_multiplier: float,
     overwrite: bool,
 ) -> int:
     input_path = input_path.expanduser().resolve()
@@ -115,7 +106,7 @@ def run_fast_semantic_movie(
     if not chunks:
         raise ValueError("No chunks to process.")
 
-    assembly_output_path = root_dir / f"{input_path.stem}_fast_semantic_assembly.mp4" if compress else output_path
+    assembly_output_path = root_dir / f"{input_path.stem}_fast_semantic_assembly.mp4"
     manifest_path = manifests_dir / "fast_semantic_movie_manifest.json"
     payload: dict[str, Any] = {
         "run_id": run_id,
@@ -124,8 +115,8 @@ def run_fast_semantic_movie(
         "work_dir": str(root_dir),
         "chunk_seconds": chunk_seconds,
         "chunk_count": len(chunks),
-        "prep_workers": max_workers,
-        "propagation_workers": propagation_workers,
+        "prep_workers": PREP_WORKERS,
+        "propagation_workers": PROPAGATION_WORKERS,
         "status": "running",
         "started_at": utc_now_iso(),
         "updated_at": utc_now_iso(),
@@ -152,10 +143,8 @@ def run_fast_semantic_movie(
 
     completed_by_index: dict[int, Path] = {}
     chunk_records: dict[int, ChunkRun] = {}
-    prep_workers = max(1, int(max_workers))
-    prop_workers = max(1, int(propagation_workers))
     try:
-        with ThreadPoolExecutor(max_workers=prep_workers) as prep_executor, ThreadPoolExecutor(max_workers=prop_workers) as prop_executor:
+        with ThreadPoolExecutor(max_workers=PREP_WORKERS) as prep_executor, ThreadPoolExecutor(max_workers=PROPAGATION_WORKERS) as prop_executor:
             prep_futures = {
                 prep_executor.submit(
                     _prepare_chunk,
@@ -166,15 +155,9 @@ def run_fast_semantic_movie(
                     ddcolor_dir=ddcolor_dir,
                     segments_dir=segments_dir,
                     weights_path=weights_path,
-                    ddcolor_input_size=ddcolor_input_size,
-                    ddcolor_device=ddcolor_device,
-                    human_parser_model_id=human_parser_model_id,
-                    human_parser_device=human_parser_device,
-                    human_parser_frame_stride=human_parser_frame_stride,
-                    output_preset=output_preset,
-                    semantic_consensus_labels=semantic_consensus_labels or DEFAULT_SEMANTIC_CONSENSUS_LABELS,
-                    semantic_protect_labels=semantic_protect_labels or DEFAULT_SEMANTIC_PROTECT_LABELS,
-                    semantic_split_labels=semantic_split_labels or DEFAULT_SEMANTIC_SPLIT_LABELS,
+                    semantic_consensus_labels=DEFAULT_SEMANTIC_CONSENSUS_LABELS,
+                    semantic_protect_labels=DEFAULT_SEMANTIC_PROTECT_LABELS,
+                    semantic_split_labels=DEFAULT_SEMANTIC_SPLIT_LABELS,
                     overwrite=overwrite,
                 ): index
                 for index, (start_seconds, end_seconds) in enumerate(chunks)
@@ -187,14 +170,9 @@ def run_fast_semantic_movie(
                     _propagate_prepared_chunk,
                     prep=prep,
                     propagated_dir=propagated_dir,
-                    propagation_mode=propagation_mode,
-                    keyframe_stride=keyframe_stride,
-                    output_preset=output_preset,
-                    chroma_blend=chroma_blend,
-                    semantic_consensus_strength=semantic_consensus_strength,
-                    semantic_consensus_labels=semantic_consensus_labels or DEFAULT_SEMANTIC_CONSENSUS_LABELS,
-                    semantic_protect_labels=semantic_protect_labels or DEFAULT_SEMANTIC_PROTECT_LABELS,
-                    semantic_split_labels=semantic_split_labels or DEFAULT_SEMANTIC_SPLIT_LABELS,
+                    semantic_consensus_labels=DEFAULT_SEMANTIC_CONSENSUS_LABELS,
+                    semantic_protect_labels=DEFAULT_SEMANTIC_PROTECT_LABELS,
+                    semantic_split_labels=DEFAULT_SEMANTIC_SPLIT_LABELS,
                     overwrite=overwrite,
                 )
                 prop_futures[prop_future] = index
@@ -216,16 +194,14 @@ def run_fast_semantic_movie(
         )
         concat_videos(input_list_path=concat_list_path, output_path=assembly_output_path)
 
-        compression_result: dict[str, Any] | None = None
-        if compress:
-            compression_result = _compress_to_size_target(
-                input_path=assembly_output_path,
-                output_path=output_path,
-                source_path=input_path,
-                preset=compression_preset,
-                crfs=compression_crfs,
-                max_size_multiplier=max_size_multiplier,
-            )
+        compression_result = _compress_to_size_target(
+            input_path=assembly_output_path,
+            output_path=output_path,
+            source_path=input_path,
+            preset=COMPRESSION_PRESET,
+            crfs=COMPRESSION_CRFS,
+            max_size_multiplier=MAX_SIZE_MULTIPLIER,
+        )
 
         payload["status"] = "succeeded"
         payload["assembly_output_path"] = str(assembly_output_path)
@@ -279,12 +255,6 @@ def _prepare_chunk(
     ddcolor_dir: Path,
     segments_dir: Path,
     weights_path: Path,
-    ddcolor_input_size: int,
-    ddcolor_device: str,
-    human_parser_model_id: str | None,
-    human_parser_device: str,
-    human_parser_frame_stride: int,
-    output_preset: str,
     semantic_consensus_labels: list[str],
     semantic_protect_labels: list[str],
     semantic_split_labels: list[str],
@@ -299,28 +269,20 @@ def _prepare_chunk(
         input_path=source_clip_path,
         output_path=ddcolor_clip_path,
         weights_path=weights_path,
-        input_size=ddcolor_input_size,
-        device=ddcolor_device,
-        output_preset=output_preset,
+        input_size=DDCOLOR_INPUT_SIZE,
+        device=MODEL_DEVICE,
+        output_preset=OUTPUT_PRESET,
         overwrite=overwrite,
     )
 
     print(f"[{chunk_id}] Running human-parser segmentation")
     run_segment_clip(
         input_path=source_clip_path,
-        backend="human-parser",
         output_dir=segment_dir,
-        tracks_path=None,
-        model_id=human_parser_model_id,
-        device=human_parser_device,
-        frame_stride=human_parser_frame_stride,
+        model_id=None,
+        device=MODEL_DEVICE,
+        frame_stride=HUMAN_PARSER_FRAME_STRIDE,
         include_labels=sorted(set(semantic_consensus_labels + semantic_protect_labels + semantic_split_labels)),
-        score_threshold=0.70,
-        mask_threshold=0.50,
-        min_area=3000,
-        iou_threshold=0.10,
-        max_center_distance=260.0,
-        max_missing_frames=8,
         overwrite=overwrite,
     )
 
@@ -339,11 +301,6 @@ def _propagate_prepared_chunk(
     *,
     prep: ChunkPrep,
     propagated_dir: Path,
-    propagation_mode: str,
-    keyframe_stride: int,
-    output_preset: str,
-    chroma_blend: float,
-    semantic_consensus_strength: float,
     semantic_consensus_labels: list[str],
     semantic_protect_labels: list[str],
     semantic_split_labels: list[str],
@@ -356,48 +313,12 @@ def _propagate_prepared_chunk(
         source_path=prep.source_clip_path,
         model_color_path=prep.ddcolor_clip_path,
         output_path=propagated_clip_path,
-        keyframe_stride=keyframe_stride,
-        propagation_mode=propagation_mode,
-        output_preset=output_preset,
-        chroma_blend=chroma_blend,
-        fallback_color_hex=None,
-        fallback_strength=0.85,
-        fallback_uncertainty="hue",
-        disagreement_start=20.0,
-        disagreement_end=70.0,
-        scene_cut_threshold=0.0,
-        scene_keyframe_window=2,
-        chroma_smooth_diameter=0,
-        chroma_smooth_sigma_color=16.0,
-        chroma_smooth_sigma_space=7.0,
-        dark_fill_strength=0.0,
-        dark_fill_luma_end=92.0,
-        dark_fill_chroma_end=22.0,
-        dark_fill_sigma=8.0,
-        model_fill_strength=0.25,
-        model_fill_chroma_end=28.0,
-        model_fill_disagreement_start=25.0,
-        model_fill_disagreement_end=80.0,
-        model_fill_blur_sigma=1.5,
-        model_fill_chroma_floor=0.0,
-        component_fill_strength=0.0,
-        component_fill_luma_end=100.0,
-        component_fill_min_area=1800,
-        component_fill_model_chroma_min=14.0,
-        blue_suppress_strength=0.0,
-        blue_suppress_hue_start=85.0,
-        blue_suppress_hue_end=132.0,
+        output_preset=OUTPUT_PRESET,
         semantic_consensus_manifest_path=prep.segment_manifest_path,
         semantic_consensus_labels=semantic_consensus_labels,
         semantic_protect_labels=semantic_protect_labels,
-        semantic_protect_dilate=3,
         semantic_split_labels=semantic_split_labels,
-        semantic_consensus_strength=semantic_consensus_strength,
-        semantic_consensus_min_area=600,
-        semantic_consensus_model_chroma_min=8.0,
-        semantic_consensus_feather_sigma=1.2,
-        semantic_consensus_diversify_strength=0.65,
-        semantic_consensus_diversify_threshold=20.0,
+        semantic_consensus_strength=SEMANTIC_CONSENSUS_STRENGTH,
         overwrite=overwrite,
     )
     propagation_runtime = time.perf_counter() - started

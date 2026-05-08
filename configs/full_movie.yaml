@@ -8,8 +8,6 @@ runtime:
   backend_preference: mps
   fallback_backend: cpu
   num_workers: 1
-  deterministic: true
-  frame_transport: pipe
   inference_batch_size: 16
   torch_compile: true
   torch_compile_mode: default
@@ -17,13 +15,11 @@ runtime:
   cleanup_scene_clips: true
 
 video:
-  preserve_fps: true
   output_codec: libx264
   crf: 16
   pixel_format: yuv420p
 
 compression:
-  enabled: true
   video_codec: libx264
   preset: medium
   crf: 20
@@ -39,15 +35,6 @@ scenes:
   min_scene_seconds: 2.0
   max_scene_seconds: 90.0
   overlap_seconds: 0.0
-
-postprocess:
-  temporal_smoothing: false
-  smoothing_strength: 0.0
-  smoothing_chroma_threshold: 24.0
-  adaptive_smoothing_boost: 0.0
-  warmth: 0.0
-  shadow_warmth: 0.0
-  blue_reduction: 0.0
 
 paths:
   scene_dir: data/scenes

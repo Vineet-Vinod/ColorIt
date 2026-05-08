@@ -33,10 +33,6 @@ class AppConfig:
         return self.raw["scenes"]
 
     @property
-    def postprocess(self) -> dict[str, Any]:
-        return self.raw["postprocess"]
-
-    @property
     def compression(self) -> dict[str, Any]:
         return self.raw.get("compression", {})
 
@@ -46,7 +42,7 @@ def load_config(path: Path) -> AppConfig:
         raise FileNotFoundError(f"Config file not found: {path}")
 
     data = yaml.safe_load(path.read_text()) or {}
-    for key in ("model", "runtime", "video", "scenes", "postprocess", "paths"):
+    for key in ("model", "runtime", "video", "scenes", "paths"):
         if key not in data:
             raise ValueError(f"Config file is missing required top-level key: {key}")
 

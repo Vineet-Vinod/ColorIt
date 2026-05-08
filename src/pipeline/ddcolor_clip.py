@@ -19,6 +19,7 @@ def run_ddcolor_clip(
     weights_path: Path,
     input_size: int,
     device: str,
+    output_preset: str,
     overwrite: bool,
 ) -> int:
     input_path = input_path.expanduser().resolve()
@@ -67,6 +68,7 @@ def run_ddcolor_clip(
         video_codec="libx264",
         crf=16,
         pixel_format="yuv420p",
+        preset=output_preset,
         audio_input_path=input_path,
     )
     if reader.stdout is None or reader.stderr is None:

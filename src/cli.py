@@ -11,6 +11,7 @@ from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import load_config
 from src.pipeline.ddcolor_clip import run_ddcolor_clip
 from src.pipeline.ffmpeg_utils import compress_video
+from src.pipeline.fast_semantic_movie import run_fast_semantic_movie
 from src.pipeline.inference import colorize_image_file
 from src.pipeline.manifest_stats import run_manifest_stats
 from src.pipeline.model_loader import load_colorizer_bundle
@@ -98,6 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     ddcolor_parser.add_argument("--weights", required=True)
     ddcolor_parser.add_argument("--input-size", type=int, default=512)
     ddcolor_parser.add_argument("--device", default="auto", choices=("auto", "cpu", "mps", "cuda"))
+    ddcolor_parser.add_argument("--output-preset", default="medium")
     ddcolor_parser.add_argument("--overwrite", action="store_true")
     ddcolor_parser.set_defaults(handler=handle_ddcolor_clip)
 
@@ -109,9 +111,194 @@ def build_parser() -> argparse.ArgumentParser:
     chroma_propagate_parser.add_argument("--model-color", required=True, help="Model-colorized clip to sample keyframes from.")
     chroma_propagate_parser.add_argument("--output", required=True)
     chroma_propagate_parser.add_argument("--keyframe-stride", type=int, default=35)
+    chroma_propagate_parser.add_argument(
+        "--propagation-mode",
+        choices=("flow", "model"),
+        default="flow",
+        help="Use optical-flow keyframe propagation or the model-color clip chroma directly.",
+    )
+    chroma_propagate_parser.add_argument("--output-preset", default="medium")
     chroma_propagate_parser.add_argument("--chroma-blend", type=float, default=0.80)
+    chroma_propagate_parser.add_argument(
+        "--fallback-color",
+        default=None,
+        help="Optional #RRGGBB chroma to use where forward/backward propagation disagrees.",
+    )
+    chroma_propagate_parser.add_argument("--fallback-strength", type=float, default=0.85)
+    chroma_propagate_parser.add_argument(
+        "--fallback-uncertainty",
+        choices=("hue", "ab-delta"),
+        default="hue",
+        help="Uncertainty signal used for fallback-color blending.",
+    )
+    chroma_propagate_parser.add_argument("--disagreement-start", type=float, default=20.0)
+    chroma_propagate_parser.add_argument("--disagreement-end", type=float, default=70.0)
+    chroma_propagate_parser.add_argument(
+        "--scene-cut-threshold",
+        type=float,
+        default=0.0,
+        help="Mean grayscale frame-delta threshold for adding cut-local model keyframes. Disabled by default.",
+    )
+    chroma_propagate_parser.add_argument(
+        "--scene-keyframe-window",
+        type=int,
+        default=2,
+        help="Number of neighboring frames around each detected cut to force as model keyframes.",
+    )
+    chroma_propagate_parser.add_argument(
+        "--chroma-smooth-diameter",
+        type=int,
+        default=0,
+        help="Bilateral filter diameter for propagated Lab chroma. Disabled by default.",
+    )
+    chroma_propagate_parser.add_argument("--chroma-smooth-sigma-color", type=float, default=16.0)
+    chroma_propagate_parser.add_argument("--chroma-smooth-sigma-space", type=float, default=7.0)
+    chroma_propagate_parser.add_argument(
+        "--dark-fill-strength",
+        type=float,
+        default=0.0,
+        help="Borrow nearby propagated chroma into dark low-chroma regions. Disabled by default.",
+    )
+    chroma_propagate_parser.add_argument("--dark-fill-luma-end", type=float, default=92.0)
+    chroma_propagate_parser.add_argument("--dark-fill-chroma-end", type=float, default=22.0)
+    chroma_propagate_parser.add_argument("--dark-fill-sigma", type=float, default=8.0)
+    chroma_propagate_parser.add_argument(
+        "--model-fill-strength",
+        type=float,
+        default=0.0,
+        help="Use current-frame model chroma to repair weak or uncertain propagated chroma. Disabled by default.",
+    )
+    chroma_propagate_parser.add_argument("--model-fill-chroma-end", type=float, default=28.0)
+    chroma_propagate_parser.add_argument("--model-fill-disagreement-start", type=float, default=25.0)
+    chroma_propagate_parser.add_argument("--model-fill-disagreement-end", type=float, default=80.0)
+    chroma_propagate_parser.add_argument("--model-fill-blur-sigma", type=float, default=1.5)
+    chroma_propagate_parser.add_argument(
+        "--model-fill-chroma-floor",
+        type=float,
+        default=0.0,
+        help="Minimum Lab chroma magnitude for model-fill repair. Disabled by default.",
+    )
+    chroma_propagate_parser.add_argument(
+        "--component-fill-strength",
+        type=float,
+        default=0.0,
+        help="Force connected dark regions toward their median current-frame model chroma. Disabled by default.",
+    )
+    chroma_propagate_parser.add_argument("--component-fill-luma-end", type=float, default=100.0)
+    chroma_propagate_parser.add_argument("--component-fill-min-area", type=int, default=1800)
+    chroma_propagate_parser.add_argument("--component-fill-model-chroma-min", type=float, default=14.0)
+    chroma_propagate_parser.add_argument(
+        "--blue-suppress-strength",
+        type=float,
+        default=0.0,
+        help="Blend blue/cyan-biased chroma toward fallback-color. Requires --fallback-color.",
+    )
+    chroma_propagate_parser.add_argument("--blue-suppress-hue-start", type=float, default=85.0)
+    chroma_propagate_parser.add_argument("--blue-suppress-hue-end", type=float, default=132.0)
+    chroma_propagate_parser.add_argument(
+        "--semantic-consensus-manifest",
+        default=None,
+        help="Optional human-parser segment manifest used for garment-region chroma consensus.",
+    )
+    chroma_propagate_parser.add_argument(
+        "--semantic-consensus-label",
+        action="append",
+        default=[],
+        help="Semantic garment label to use for consensus. Can be passed multiple times.",
+    )
+    chroma_propagate_parser.add_argument(
+        "--semantic-protect-label",
+        action="append",
+        default=[],
+        help="Semantic label to subtract from garment consensus masks. Can be passed multiple times.",
+    )
+    chroma_propagate_parser.add_argument("--semantic-protect-dilate", type=int, default=2)
+    chroma_propagate_parser.add_argument(
+        "--semantic-split-label",
+        action="append",
+        default=[],
+        help="Semantic label whose component centroids split merged garment masks. Can be passed multiple times.",
+    )
+    chroma_propagate_parser.add_argument("--semantic-consensus-strength", type=float, default=0.0)
+    chroma_propagate_parser.add_argument("--semantic-consensus-min-area", type=int, default=700)
+    chroma_propagate_parser.add_argument("--semantic-consensus-model-chroma-min", type=float, default=10.0)
+    chroma_propagate_parser.add_argument("--semantic-consensus-feather-sigma", type=float, default=1.2)
+    chroma_propagate_parser.add_argument("--semantic-consensus-diversify-strength", type=float, default=0.0)
+    chroma_propagate_parser.add_argument("--semantic-consensus-diversify-threshold", type=float, default=12.0)
     chroma_propagate_parser.add_argument("--overwrite", action="store_true")
     chroma_propagate_parser.set_defaults(handler=handle_model_chroma_propagate)
+
+    fast_semantic_parser = subparsers.add_parser(
+        "fast-semantic-movie",
+        help=argparse.SUPPRESS,
+    )
+    fast_semantic_parser.add_argument("--input", required=True, help="Input movie path.")
+    fast_semantic_parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional final output path. Defaults to the input path with '_fast_semantic_color' appended.",
+    )
+    fast_semantic_parser.add_argument("--ddcolor-repo", required=True)
+    fast_semantic_parser.add_argument("--weights", required=True)
+    fast_semantic_parser.add_argument(
+        "--work-dir",
+        default=None,
+        help="Intermediate artifact directory. Defaults under ~/ColorIt/data/fast_semantic_movie/.",
+    )
+    fast_semantic_parser.add_argument("--chunk-seconds", type=float, default=60.0)
+    fast_semantic_parser.add_argument("--limit-chunks", type=int, default=None)
+    fast_semantic_parser.add_argument("--ddcolor-input-size", type=int, default=256)
+    fast_semantic_parser.add_argument("--ddcolor-device", default="auto", choices=("auto", "cpu", "mps", "cuda"))
+    fast_semantic_parser.add_argument("--human-parser-model-id", default=None)
+    fast_semantic_parser.add_argument("--human-parser-device", default="auto", choices=("auto", "cpu", "mps"))
+    fast_semantic_parser.add_argument(
+        "--human-parser-frame-stride",
+        type=int,
+        default=8,
+        help="Fast default: run human-parser every N frames and reuse the mask between samples.",
+    )
+    fast_semantic_parser.add_argument(
+        "--propagation-mode",
+        choices=("flow", "model"),
+        default="model",
+        help="Fast default uses current-frame model chroma; flow is slower but more temporally conservative.",
+    )
+    fast_semantic_parser.add_argument("--keyframe-stride", type=int, default=35)
+    fast_semantic_parser.add_argument("--output-preset", default="ultrafast")
+    fast_semantic_parser.add_argument("--chroma-blend", type=float, default=1.0)
+    fast_semantic_parser.add_argument("--semantic-consensus-strength", type=float, default=0.92)
+    fast_semantic_parser.add_argument(
+        "--semantic-consensus-label",
+        action="append",
+        default=[],
+        help="Semantic garment label to use for consensus. Defaults to common clothing labels.",
+    )
+    fast_semantic_parser.add_argument(
+        "--semantic-protect-label",
+        action="append",
+        default=[],
+        help="Semantic label to subtract from garment masks. Defaults to face/hair/limbs.",
+    )
+    fast_semantic_parser.add_argument(
+        "--semantic-split-label",
+        action="append",
+        default=[],
+        help="Semantic label whose components split merged garment masks. Defaults to face/hair.",
+    )
+    fast_semantic_parser.add_argument("--no-compress", action="store_true")
+    fast_semantic_parser.add_argument("--max-workers", type=int, default=1)
+    fast_semantic_parser.add_argument("--propagation-workers", type=int, default=1)
+    fast_semantic_parser.add_argument("--compression-preset", default="veryfast")
+    fast_semantic_parser.add_argument(
+        "--compression-crf",
+        action="append",
+        type=int,
+        default=[],
+        help="Compression CRF to try. Can be passed multiple times. Defaults to 20, 23, 26, 28.",
+    )
+    fast_semantic_parser.add_argument("--max-size-multiplier", type=float, default=2.0)
+    fast_semantic_parser.add_argument("--overwrite", action="store_true")
+    fast_semantic_parser.set_defaults(handler=handle_fast_semantic_movie)
 
     movie_parser = subparsers.add_parser(
         "colorize-movie",
@@ -198,6 +385,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     segment_parser.add_argument("--score-threshold", type=float, default=0.70)
     segment_parser.add_argument("--mask-threshold", type=float, default=0.50)
+    segment_parser.add_argument(
+        "--frame-stride",
+        type=int,
+        default=1,
+        help="For human-parser, run model inference every N frames and reuse the last mask between samples.",
+    )
+    segment_parser.add_argument(
+        "--include-label",
+        action="append",
+        default=[],
+        help="For human-parser, only write these normalized labels to the manifest.",
+    )
     segment_parser.add_argument("--min-area", type=int, default=3000)
     segment_parser.add_argument("--iou-threshold", type=float, default=0.10)
     segment_parser.add_argument("--max-center-distance", type=float, default=260.0)
@@ -534,6 +733,7 @@ def handle_ddcolor_clip(args: argparse.Namespace) -> int:
         weights_path=Path(args.weights),
         input_size=int(args.input_size),
         device=str(args.device),
+        output_preset=str(args.output_preset),
         overwrite=bool(args.overwrite),
     )
 
@@ -544,7 +744,81 @@ def handle_model_chroma_propagate(args: argparse.Namespace) -> int:
         model_color_path=Path(args.model_color),
         output_path=Path(args.output),
         keyframe_stride=int(args.keyframe_stride),
+        propagation_mode=str(args.propagation_mode),
+        output_preset=str(args.output_preset),
         chroma_blend=float(args.chroma_blend),
+        fallback_color_hex=str(args.fallback_color) if args.fallback_color else None,
+        fallback_strength=float(args.fallback_strength),
+        fallback_uncertainty=str(args.fallback_uncertainty),
+        disagreement_start=float(args.disagreement_start),
+        disagreement_end=float(args.disagreement_end),
+        scene_cut_threshold=float(args.scene_cut_threshold),
+        scene_keyframe_window=int(args.scene_keyframe_window),
+        chroma_smooth_diameter=int(args.chroma_smooth_diameter),
+        chroma_smooth_sigma_color=float(args.chroma_smooth_sigma_color),
+        chroma_smooth_sigma_space=float(args.chroma_smooth_sigma_space),
+        dark_fill_strength=float(args.dark_fill_strength),
+        dark_fill_luma_end=float(args.dark_fill_luma_end),
+        dark_fill_chroma_end=float(args.dark_fill_chroma_end),
+        dark_fill_sigma=float(args.dark_fill_sigma),
+        model_fill_strength=float(args.model_fill_strength),
+        model_fill_chroma_end=float(args.model_fill_chroma_end),
+        model_fill_disagreement_start=float(args.model_fill_disagreement_start),
+        model_fill_disagreement_end=float(args.model_fill_disagreement_end),
+        model_fill_blur_sigma=float(args.model_fill_blur_sigma),
+        model_fill_chroma_floor=float(args.model_fill_chroma_floor),
+        component_fill_strength=float(args.component_fill_strength),
+        component_fill_luma_end=float(args.component_fill_luma_end),
+        component_fill_min_area=int(args.component_fill_min_area),
+        component_fill_model_chroma_min=float(args.component_fill_model_chroma_min),
+        blue_suppress_strength=float(args.blue_suppress_strength),
+        blue_suppress_hue_start=float(args.blue_suppress_hue_start),
+        blue_suppress_hue_end=float(args.blue_suppress_hue_end),
+        semantic_consensus_manifest_path=Path(args.semantic_consensus_manifest)
+        if args.semantic_consensus_manifest
+        else None,
+        semantic_consensus_labels=[str(label) for label in args.semantic_consensus_label],
+        semantic_protect_labels=[str(label) for label in args.semantic_protect_label],
+        semantic_protect_dilate=int(args.semantic_protect_dilate),
+        semantic_split_labels=[str(label) for label in args.semantic_split_label],
+        semantic_consensus_strength=float(args.semantic_consensus_strength),
+        semantic_consensus_min_area=int(args.semantic_consensus_min_area),
+        semantic_consensus_model_chroma_min=float(args.semantic_consensus_model_chroma_min),
+        semantic_consensus_feather_sigma=float(args.semantic_consensus_feather_sigma),
+        semantic_consensus_diversify_strength=float(args.semantic_consensus_diversify_strength),
+        semantic_consensus_diversify_threshold=float(args.semantic_consensus_diversify_threshold),
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_fast_semantic_movie(args: argparse.Namespace) -> int:
+    return run_fast_semantic_movie(
+        input_path=Path(args.input),
+        output_path=Path(args.output) if args.output else None,
+        ddcolor_repo_path=Path(args.ddcolor_repo),
+        weights_path=Path(args.weights),
+        work_dir=Path(args.work_dir) if args.work_dir else None,
+        chunk_seconds=float(args.chunk_seconds),
+        limit_chunks=args.limit_chunks,
+        ddcolor_input_size=int(args.ddcolor_input_size),
+        ddcolor_device=str(args.ddcolor_device),
+        human_parser_model_id=str(args.human_parser_model_id) if args.human_parser_model_id else None,
+        human_parser_device=str(args.human_parser_device),
+        human_parser_frame_stride=int(args.human_parser_frame_stride),
+        propagation_mode=str(args.propagation_mode),
+        keyframe_stride=int(args.keyframe_stride),
+        output_preset=str(args.output_preset),
+        chroma_blend=float(args.chroma_blend),
+        semantic_consensus_strength=float(args.semantic_consensus_strength),
+        semantic_consensus_labels=[str(label) for label in args.semantic_consensus_label],
+        semantic_protect_labels=[str(label) for label in args.semantic_protect_label],
+        semantic_split_labels=[str(label) for label in args.semantic_split_label],
+        max_workers=int(args.max_workers),
+        propagation_workers=int(args.propagation_workers),
+        compress=not bool(args.no_compress),
+        compression_preset=str(args.compression_preset),
+        compression_crfs=[int(value) for value in args.compression_crf] or [20, 23, 26, 28],
+        max_size_multiplier=float(args.max_size_multiplier),
         overwrite=bool(args.overwrite),
     )
 
@@ -615,6 +889,8 @@ def handle_segment_clip(args: argparse.Namespace) -> int:
         tracks_path=Path(args.tracks) if args.tracks else None,
         model_id=args.model_id,
         device=str(args.device),
+        frame_stride=int(args.frame_stride),
+        include_labels=[str(label) for label in args.include_label],
         score_threshold=float(args.score_threshold),
         mask_threshold=float(args.mask_threshold),
         min_area=int(args.min_area),
@@ -775,6 +1051,7 @@ def _looks_like_movie_path(value: str) -> bool:
         "colorize-clip",
         "ddcolor-clip",
         "model-chroma-propagate",
+        "fast-semantic-movie",
         "colorize-movie",
         "compress-video",
         "segment-clip",

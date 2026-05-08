@@ -11,8 +11,6 @@ dependencies = [
   "PyYAML>=6.0,<7.0",
   "torch>=2.6,<3",
   "torchvision>=0.21,<1",
-  "safetensors>=0.4,<1",
-  "transformers>=4.45,<6",
 ]
 
 [project.scripts]

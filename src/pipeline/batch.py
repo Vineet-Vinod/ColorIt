@@ -14,12 +14,6 @@ from src.pipeline.model_chroma_propagate import run_model_chroma_propagate
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 from src.pipeline.scenes import load_scene_manifest
-from src.pipeline.segment_clip import run_segment_clip
-
-
-GARMENT_LABELS = ["upper_clothes", "dress", "skirt", "pants", "coat"]
-PROTECT_LABELS = ["face", "hair", "left_arm", "right_arm", "left_leg", "right_leg"]
-SPLIT_LABELS = ["face", "hair"]
 
 
 @dataclass(frozen=True)
@@ -59,8 +53,7 @@ def run_colorize_batch(
     colorized_output_dir = paths.colorized_dir / "scenes" / run_id
     deoldify_output_dir = paths.colorized_dir / "deoldify" / run_id
     ddcolor_output_dir = paths.colorized_dir / "ddcolor" / run_id
-    segment_output_dir = paths.colorized_dir / "segments" / run_id
-    for directory in (scene_output_dir, colorized_output_dir, deoldify_output_dir, ddcolor_output_dir, segment_output_dir):
+    for directory in (scene_output_dir, colorized_output_dir, deoldify_output_dir, ddcolor_output_dir):
         directory.mkdir(parents=True, exist_ok=True)
     cleanup_scene_clips = bool(config.raw.get("runtime", {}).get("cleanup_scene_clips", True))
 
@@ -91,7 +84,6 @@ def run_colorize_batch(
         scene_clip_path = scene_output_dir / f"{scene_id}.mp4"
         deoldify_clip_path = deoldify_output_dir / f"{scene_id}.mp4"
         ddcolor_clip_path = ddcolor_output_dir / f"{scene_id}.mp4"
-        segment_dir = segment_output_dir / scene_id
         colorized_clip_path = colorized_output_dir / f"{scene_id}.mp4"
         existing_status = _get_scene_status(batch_payload, scene_id)
 
@@ -136,59 +128,12 @@ def run_colorize_batch(
                 output_preset="ultrafast",
                 overwrite=True,
             )
-            run_segment_clip(
-                input_path=scene_clip_path,
-                output_dir=segment_dir,
-                model_id=None,
-                device="auto",
-                frame_stride=8,
-                include_labels=sorted(set(GARMENT_LABELS + PROTECT_LABELS + SPLIT_LABELS)),
-                overwrite=True,
-            )
             run_model_chroma_propagate(
                 source_path=deoldify_clip_path,
                 model_color_path=ddcolor_clip_path,
                 output_path=colorized_clip_path,
                 keyframe_stride=35,
-                chroma_blend=0.80,
-                fallback_color_hex=None,
-                fallback_strength=0.85,
-                fallback_uncertainty="hue",
-                disagreement_start=20.0,
-                disagreement_end=70.0,
-                scene_cut_threshold=0.0,
-                scene_keyframe_window=2,
-                chroma_smooth_diameter=0,
-                chroma_smooth_sigma_color=16.0,
-                chroma_smooth_sigma_space=7.0,
-                dark_fill_strength=0.0,
-                dark_fill_luma_end=92.0,
-                dark_fill_chroma_end=22.0,
-                dark_fill_sigma=8.0,
-                model_fill_strength=0.25,
-                model_fill_chroma_end=28.0,
-                model_fill_disagreement_start=25.0,
-                model_fill_disagreement_end=80.0,
-                model_fill_blur_sigma=1.5,
-                model_fill_chroma_floor=0.0,
-                component_fill_strength=0.0,
-                component_fill_luma_end=100.0,
-                component_fill_min_area=1800,
-                component_fill_model_chroma_min=14.0,
-                blue_suppress_strength=0.0,
-                blue_suppress_hue_start=85.0,
-                blue_suppress_hue_end=132.0,
-                semantic_consensus_manifest_path=segment_dir / "segment_manifest.json",
-                semantic_consensus_labels=GARMENT_LABELS,
-                semantic_protect_labels=PROTECT_LABELS,
-                semantic_protect_dilate=3,
-                semantic_split_labels=SPLIT_LABELS,
-                semantic_consensus_strength=0.92,
-                semantic_consensus_min_area=600,
-                semantic_consensus_model_chroma_min=8.0,
-                semantic_consensus_feather_sigma=1.2,
-                semantic_consensus_diversify_strength=0.65,
-                semantic_consensus_diversify_threshold=20.0,
+                chroma_blend=1.0,
                 overwrite=True,
             )
             status = BatchSceneStatus(

@@ -171,7 +171,6 @@ def _cleanup_movie_artifacts(*, paths, run_id: str) -> None:
         paths.colorized_dir / "scenes" / run_id,
         paths.colorized_dir / "deoldify" / run_id,
         paths.colorized_dir / "ddcolor" / run_id,
-        paths.colorized_dir / "segments" / run_id,
         paths.final_dir / f"{run_id}_assembly_work.mp4",
         paths.manifest_dir / f"{run_id}.json",
         paths.manifest_dir / f"movie_run_{run_id}.json",

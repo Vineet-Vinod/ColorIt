@@ -28,6 +28,7 @@ def run_human_parser_segmentation(
     output_dir: Path,
     model_id: str,
     device: str,
+    frame_stride: int,
     overwrite: bool,
     skip_background: bool = True,
 ) -> SegmentManifest:
@@ -62,6 +63,8 @@ def run_human_parser_segmentation(
     tracks: dict[str, SegmentTrack] = {}
     frames: list[SegmentFrame] = []
     frame_index = 0
+    frame_stride = max(1, int(frame_stride))
+    class_map: np.ndarray | None = None
     try:
         while True:
             frame_data = reader.stdout.read(frame_bytes)
@@ -72,13 +75,14 @@ def run_human_parser_segmentation(
                     f"Unexpected end of rawvideo stream; expected {frame_bytes} bytes, got {len(frame_data)}."
                 )
             frame_rgb = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
-            class_map = _predict_class_map(
-                torch=torch,
-                processor=processor,
-                model=model,
-                frame_rgb=frame_rgb,
-                device=selected_device,
-            )
+            if class_map is None or frame_index % frame_stride == 0:
+                class_map = _predict_class_map(
+                    torch=torch,
+                    processor=processor,
+                    model=model,
+                    frame_rgb=frame_rgb,
+                    device=selected_device,
+                )
 
             instances: list[SegmentInstance] = []
             for class_id in sorted(int(value) for value in np.unique(class_map)):

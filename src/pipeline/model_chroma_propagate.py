@@ -15,6 +15,8 @@ def run_model_chroma_propagate(
     model_color_path: Path,
     output_path: Path,
     keyframe_stride: int,
+    propagation_mode: str,
+    output_preset: str,
     chroma_blend: float,
     fallback_color_hex: str | None,
     fallback_strength: float,
@@ -106,6 +108,7 @@ def run_model_chroma_propagate(
         source_frames=source_frames,
         model_frames=model_frames,
         keyframe_indices=keyframe_indices,
+        propagation_mode=propagation_mode,
         chroma_blend=chroma_blend,
         fallback_ab=fallback_ab,
         fallback_strength=fallback_strength,
@@ -146,6 +149,7 @@ def run_model_chroma_propagate(
         width=width,
         height=height,
         fps=str(source_info["fps"]),
+        preset=output_preset,
         audio_input_path=source_path,
     )
     print(f"Model chroma propagation written: {output_path}")
@@ -160,6 +164,7 @@ def _propagate_chroma(
     source_frames: list[np.ndarray],
     model_frames: list[np.ndarray],
     keyframe_indices: list[int],
+    propagation_mode: str,
     chroma_blend: float,
     fallback_ab: np.ndarray | None,
     fallback_strength: float,
@@ -196,7 +201,8 @@ def _propagate_chroma(
 ) -> list[np.ndarray]:
     if fallback_uncertainty not in {"ab-delta", "hue"}:
         raise ValueError(f"Unsupported fallback uncertainty mode: {fallback_uncertainty}")
-    source_gray = [cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY) for frame in source_frames]
+    if propagation_mode not in {"flow", "model"}:
+        raise ValueError(f"Unsupported propagation mode: {propagation_mode}")
     source_l = [cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)[:, :, :1].astype(np.float32) for frame in source_frames]
     model_ab_frames = [cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)[:, :, 1:3].astype(np.float32) for frame in model_frames]
     model_ab_by_key = {index: model_ab_frames[index] for index in keyframe_indices}
@@ -211,43 +217,49 @@ def _propagate_chroma(
     )
 
     forward_ab: dict[int, np.ndarray] = {}
-    for start, end in zip(keyframe_indices, keyframe_indices[1:]):
-        ab = model_ab_by_key[start]
-        forward_ab[start] = ab
-        for frame_index in range(start + 1, end + 1):
-            ab = _warp_ab(previous_ab=ab, previous_gray=source_gray[frame_index - 1], current_gray=source_gray[frame_index])
-            forward_ab[frame_index] = ab
-
     backward_ab: dict[int, np.ndarray] = {}
-    for start, end in zip(reversed(keyframe_indices[:-1]), reversed(keyframe_indices[1:])):
-        ab = model_ab_by_key[end]
-        backward_ab[end] = ab
-        for frame_index in range(end - 1, start - 1, -1):
-            ab = _warp_ab(previous_ab=ab, previous_gray=source_gray[frame_index + 1], current_gray=source_gray[frame_index])
-            backward_ab[frame_index] = ab
+    if propagation_mode == "flow":
+        source_gray = [cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY) for frame in source_frames]
+        for start, end in zip(keyframe_indices, keyframe_indices[1:]):
+            ab = model_ab_by_key[start]
+            forward_ab[start] = ab
+            for frame_index in range(start + 1, end + 1):
+                ab = _warp_ab(previous_ab=ab, previous_gray=source_gray[frame_index - 1], current_gray=source_gray[frame_index])
+                forward_ab[frame_index] = ab
+
+        for start, end in zip(reversed(keyframe_indices[:-1]), reversed(keyframe_indices[1:])):
+            ab = model_ab_by_key[end]
+            backward_ab[end] = ab
+            for frame_index in range(end - 1, start - 1, -1):
+                ab = _warp_ab(previous_ab=ab, previous_gray=source_gray[frame_index + 1], current_gray=source_gray[frame_index])
+                backward_ab[frame_index] = ab
 
     output_frames: list[np.ndarray] = []
     blend = float(np.clip(chroma_blend, 0.0, 1.0))
     for frame_index in range(len(source_frames)):
-        left_key = max(index for index in keyframe_indices if index <= frame_index)
-        right_key = min(index for index in keyframe_indices if index >= frame_index)
-        if left_key == right_key:
-            propagated_ab = model_ab_by_key[left_key]
+        model_ab = model_ab_frames[frame_index]
+        if propagation_mode == "model":
+            propagated_ab = model_ab
             disagreement = None
         else:
-            t = (frame_index - left_key) / max(right_key - left_key, 1)
-            forward = forward_ab[frame_index]
-            backward = backward_ab[frame_index]
-            propagated_ab = (1.0 - t) * forward + t * backward
-            if fallback_ab is not None and fallback_strength > 0.0:
-                disagreement = _chroma_disagreement(forward=forward, backward=backward, mode=fallback_uncertainty)
-                uncertainty = _smoothstep(disagreement_start, disagreement_end, disagreement)
-                uncertainty = cv2.GaussianBlur(uncertainty.astype(np.float32), (0, 0), 2.0)
-                fallback_mix = np.clip(uncertainty * fallback_strength, 0.0, 1.0)[:, :, None]
-                propagated_ab = (1.0 - fallback_mix) * propagated_ab + fallback_mix * fallback_ab
+            left_key = max(index for index in keyframe_indices if index <= frame_index)
+            right_key = min(index for index in keyframe_indices if index >= frame_index)
+            if left_key == right_key:
+                propagated_ab = model_ab_by_key[left_key]
+                disagreement = None
             else:
-                disagreement = _chroma_disagreement(forward=forward, backward=backward, mode=fallback_uncertainty)
-        model_ab = model_ab_frames[frame_index]
+                t = (frame_index - left_key) / max(right_key - left_key, 1)
+                forward = forward_ab[frame_index]
+                backward = backward_ab[frame_index]
+                propagated_ab = (1.0 - t) * forward + t * backward
+                if fallback_ab is not None and fallback_strength > 0.0:
+                    disagreement = _chroma_disagreement(forward=forward, backward=backward, mode=fallback_uncertainty)
+                    uncertainty = _smoothstep(disagreement_start, disagreement_end, disagreement)
+                    uncertainty = cv2.GaussianBlur(uncertainty.astype(np.float32), (0, 0), 2.0)
+                    fallback_mix = np.clip(uncertainty * fallback_strength, 0.0, 1.0)[:, :, None]
+                    propagated_ab = (1.0 - fallback_mix) * propagated_ab + fallback_mix * fallback_ab
+                else:
+                    disagreement = _chroma_disagreement(forward=forward, backward=backward, mode=fallback_uncertainty)
         propagated_ab = _fill_from_model_chroma(
             propagated_ab,
             model_ab=model_ab,
@@ -871,6 +883,7 @@ def _write_frames(
     width: int,
     height: int,
     fps: str,
+    preset: str,
     audio_input_path: Path,
 ) -> None:
     writer = open_rawvideo_writer(
@@ -881,6 +894,7 @@ def _write_frames(
         video_codec="libx264",
         crf=16,
         pixel_format="yuv420p",
+        preset=preset,
         audio_input_path=audio_input_path,
     )
     if writer.stdin is None or writer.stderr is None:

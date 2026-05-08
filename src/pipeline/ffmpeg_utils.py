@@ -168,6 +168,7 @@ def open_rawvideo_writer(
     video_codec: str,
     crf: int,
     pixel_format: str,
+    preset: str | None = None,
     audio_input_path: Path | None = None,
 ) -> subprocess.Popen[bytes]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -194,6 +195,12 @@ def open_rawvideo_writer(
         [
             "-c:v",
             video_codec,
+        ]
+    )
+    if preset is not None:
+        command.extend(["-preset", preset])
+    command.extend(
+        [
             "-crf",
             str(crf),
             "-pix_fmt",

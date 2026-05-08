@@ -18,6 +18,7 @@ def run_segment_clip(
     tracks_path: Path | None,
     model_id: str | None,
     device: str,
+    frame_stride: int,
     score_threshold: float,
     mask_threshold: float,
     min_area: int,
@@ -42,6 +43,7 @@ def run_segment_clip(
             output_dir=output_dir,
             model_id=model_id or DEFAULT_HUMAN_PARSER_MODEL_ID,
             device=device,
+            frame_stride=frame_stride,
             overwrite=overwrite,
         )
     elif backend == "person-maskrcnn":

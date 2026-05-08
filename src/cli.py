@@ -98,6 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     ddcolor_parser.add_argument("--weights", required=True)
     ddcolor_parser.add_argument("--input-size", type=int, default=512)
     ddcolor_parser.add_argument("--device", default="auto", choices=("auto", "cpu", "mps", "cuda"))
+    ddcolor_parser.add_argument("--output-preset", default="medium")
     ddcolor_parser.add_argument("--overwrite", action="store_true")
     ddcolor_parser.set_defaults(handler=handle_ddcolor_clip)
 
@@ -109,6 +110,13 @@ def build_parser() -> argparse.ArgumentParser:
     chroma_propagate_parser.add_argument("--model-color", required=True, help="Model-colorized clip to sample keyframes from.")
     chroma_propagate_parser.add_argument("--output", required=True)
     chroma_propagate_parser.add_argument("--keyframe-stride", type=int, default=35)
+    chroma_propagate_parser.add_argument(
+        "--propagation-mode",
+        choices=("flow", "model"),
+        default="flow",
+        help="Use optical-flow keyframe propagation or the model-color clip chroma directly.",
+    )
+    chroma_propagate_parser.add_argument("--output-preset", default="medium")
     chroma_propagate_parser.add_argument("--chroma-blend", type=float, default=0.80)
     chroma_propagate_parser.add_argument(
         "--fallback-color",
@@ -304,6 +312,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     segment_parser.add_argument("--score-threshold", type=float, default=0.70)
     segment_parser.add_argument("--mask-threshold", type=float, default=0.50)
+    segment_parser.add_argument(
+        "--frame-stride",
+        type=int,
+        default=1,
+        help="For human-parser, run model inference every N frames and reuse the last mask between samples.",
+    )
     segment_parser.add_argument("--min-area", type=int, default=3000)
     segment_parser.add_argument("--iou-threshold", type=float, default=0.10)
     segment_parser.add_argument("--max-center-distance", type=float, default=260.0)
@@ -640,6 +654,7 @@ def handle_ddcolor_clip(args: argparse.Namespace) -> int:
         weights_path=Path(args.weights),
         input_size=int(args.input_size),
         device=str(args.device),
+        output_preset=str(args.output_preset),
         overwrite=bool(args.overwrite),
     )
 
@@ -650,6 +665,8 @@ def handle_model_chroma_propagate(args: argparse.Namespace) -> int:
         model_color_path=Path(args.model_color),
         output_path=Path(args.output),
         keyframe_stride=int(args.keyframe_stride),
+        propagation_mode=str(args.propagation_mode),
+        output_preset=str(args.output_preset),
         chroma_blend=float(args.chroma_blend),
         fallback_color_hex=str(args.fallback_color) if args.fallback_color else None,
         fallback_strength=float(args.fallback_strength),
@@ -761,6 +778,7 @@ def handle_segment_clip(args: argparse.Namespace) -> int:
         tracks_path=Path(args.tracks) if args.tracks else None,
         model_id=args.model_id,
         device=str(args.device),
+        frame_stride=int(args.frame_stride),
         score_threshold=float(args.score_threshold),
         mask_threshold=float(args.mask_threshold),
         min_area=int(args.min_area),

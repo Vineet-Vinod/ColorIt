@@ -14,6 +14,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ddcolor = [
+  "huggingface-hub>=0.24,<2",
+  "scikit-image>=0.22,<1",
+  "scipy>=1.11,<2",
+  "tqdm>=4.66,<5",
+]
 segmentation = [
   "safetensors>=0.4,<1",
   "transformers>=4.45,<6",

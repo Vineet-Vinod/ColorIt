@@ -4,6 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
+MAX_OUTPUT_FPS = 30.0
+
 
 def extract_single_frame(*, input_path: Path, output_path: Path, time_seconds: float) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -191,6 +193,9 @@ def open_rawvideo_writer(
     ]
     if audio_input_path is not None:
         command.extend(["-i", str(audio_input_path), "-map", "0:v:0", "-map", "1:a:0?"])
+    fps_filter = output_fps_filter(fps)
+    if fps_filter is not None:
+        command.extend(["-vf", fps_filter])
     command.extend(
         [
             "-c:v",
@@ -278,6 +283,13 @@ def fps_to_decimal_string(value: str) -> str:
         return value
     numerator, denominator = value.split("/", 1)
     return str(float(numerator) / float(denominator))
+
+
+def output_fps_filter(value: str) -> str | None:
+    fps = float(fps_to_decimal_string(value))
+    if fps > MAX_OUTPUT_FPS:
+        return f"fps={int(MAX_OUTPUT_FPS)}"
+    return None
 
 
 def _run(command: list[str]) -> None:

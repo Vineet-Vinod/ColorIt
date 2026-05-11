@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from pathlib import Path
 import sys
 
+from src.pipeline.background_stabilize import run_background_stabilize
 from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import load_config
 from src.pipeline.ddcolor_clip import DEFAULT_DDCOLOR_WEIGHTS_PATH, run_ddcolor_clip
@@ -20,6 +21,7 @@ COMMANDS = {
     "colorize-frame",
     "colorize-clip",
     "ddcolor-clip",
+    "stabilize-background",
 }
 VIDEO_SUFFIXES = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm"}
 
@@ -71,6 +73,14 @@ def build_parser() -> argparse.ArgumentParser:
     ddcolor_parser.add_argument("--output-preset", default="medium")
     ddcolor_parser.add_argument("--overwrite", action="store_true")
     ddcolor_parser.set_defaults(handler=handle_ddcolor_clip)
+
+    stabilize_parser = subparsers.add_parser("stabilize-background", help=argparse.SUPPRESS)
+    stabilize_parser.add_argument("--input", required=True)
+    stabilize_parser.add_argument("--output", required=True)
+    stabilize_parser.add_argument("--strength", type=float, default=None)
+    stabilize_parser.add_argument("--chroma-damping", type=float, default=None)
+    stabilize_parser.add_argument("--overwrite", action="store_true")
+    stabilize_parser.set_defaults(handler=handle_stabilize_background)
 
     subparsers._choices_actions = [
         action for action in subparsers._choices_actions if action.dest in {"download-weights", "colorize-movie"}
@@ -132,6 +142,20 @@ def handle_ddcolor_clip(args: argparse.Namespace) -> int:
         input_size=int(args.input_size),
         device=str(args.device),
         output_preset=str(args.output_preset),
+        overwrite=bool(args.overwrite),
+    )
+
+
+def handle_stabilize_background(args: argparse.Namespace) -> int:
+    settings: dict[str, object] = {}
+    if args.strength is not None:
+        settings["strength"] = float(args.strength)
+    if args.chroma_damping is not None:
+        settings["chroma_damping"] = float(args.chroma_damping)
+    return run_background_stabilize(
+        input_path=Path(args.input),
+        output_path=Path(args.output),
+        settings=settings,
         overwrite=bool(args.overwrite),
     )
 

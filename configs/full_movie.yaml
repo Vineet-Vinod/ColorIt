@@ -39,6 +39,13 @@ background_stabilization:
   highlight_max_chroma: 180.0
   highlight_neutral_damping: 0.15
   highlight_gradient_multiplier: 3.0
+  shadow_luma_max: 82.0
+  shadow_max_chroma: 72.0
+  shadow_neutral_damping: 0.55
+  shadow_gradient_multiplier: 2.2
+  edge_min_gradient_multiplier: 3.2
+  edge_max_chroma: 88.0
+  edge_neutral_damping: 0.68
   max_gradient: 7.5
   shot_change_threshold: 18.0
   feather_radius: 9

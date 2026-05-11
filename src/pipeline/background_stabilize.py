@@ -19,6 +19,13 @@ DEFAULT_BACKGROUND_STABILIZATION = {
     "highlight_max_chroma": 180.0,
     "highlight_neutral_damping": 0.15,
     "highlight_gradient_multiplier": 3.0,
+    "shadow_luma_max": 82.0,
+    "shadow_max_chroma": 72.0,
+    "shadow_neutral_damping": 0.55,
+    "shadow_gradient_multiplier": 2.2,
+    "edge_min_gradient_multiplier": 3.2,
+    "edge_max_chroma": 88.0,
+    "edge_neutral_damping": 0.68,
     "max_gradient": 7.5,
     "shot_change_threshold": 18.0,
     "feather_radius": 9,
@@ -209,6 +216,7 @@ def _stabilize_frame(
 ) -> np.ndarray:
     lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)
     ab = lab[:, :, 1:3].astype(np.float32)
+    lab_float = lab.astype(np.float32)
     mask = _background_mask(
         lab=lab,
         max_chroma=float(settings["max_chroma"]),
@@ -216,27 +224,26 @@ def _stabilize_frame(
         highlight_max_chroma=float(settings["highlight_max_chroma"]),
         max_gradient=float(settings["max_gradient"]),
     )
-    if float(mask.mean()) < float(settings["min_mask_fraction"]):
-        return frame
 
-    mean_ab = _masked_mean_ab(ab=ab, mask=mask, fallback=target_ab)
-    strength = float(np.clip(settings["strength"], 0.0, 1.0))
-    chroma_damping = float(np.clip(settings["chroma_damping"], 0.0, 1.0))
-    shifted = ab + (target_ab - mean_ab) * strength
-    damped = target_ab + (shifted - target_ab) * chroma_damping
-    stabilized_ab = (1.0 - strength) * shifted + strength * damped
+    if float(mask.mean()) >= float(settings["min_mask_fraction"]):
+        mean_ab = _masked_mean_ab(ab=ab, mask=mask, fallback=target_ab)
+        strength = float(np.clip(settings["strength"], 0.0, 1.0))
+        chroma_damping = float(np.clip(settings["chroma_damping"], 0.0, 1.0))
+        shifted = ab + (target_ab - mean_ab) * strength
+        damped = target_ab + (shifted - target_ab) * chroma_damping
+        stabilized_ab = (1.0 - strength) * shifted + strength * damped
 
-    feather = _feather_mask(mask, radius=int(settings["feather_radius"]))
-    lab_float = lab.astype(np.float32)
-    lab_float[:, :, 1:3] = ab * (1.0 - feather[:, :, None]) + stabilized_ab * feather[:, :, None]
-    lab_float[:, :, 1:3] = _neutralize_bright_flat_chroma(
+        feather = _feather_mask(mask, radius=int(settings["feather_radius"]))
+        lab_float[:, :, 1:3] = ab * (1.0 - feather[:, :, None]) + stabilized_ab * feather[:, :, None]
+
+    lab_float[:, :, 1:3] = _neutralize_unstable_chroma(
         lab_float=lab_float,
         settings=settings,
     )
     return cv2.cvtColor(np.clip(lab_float, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
 
 
-def _neutralize_bright_flat_chroma(
+def _neutralize_unstable_chroma(
     *,
     lab_float: np.ndarray,
     settings: dict[str, object],
@@ -247,16 +254,56 @@ def _neutralize_bright_flat_chroma(
     gradient_x = cv2.Sobel(luma, cv2.CV_32F, 1, 0, ksize=3)
     gradient_y = cv2.Sobel(luma, cv2.CV_32F, 0, 1, ksize=3)
     gradient = np.sqrt(gradient_x * gradient_x + gradient_y * gradient_y)
-    mask = (
+    highlight_mask = (
         (luma >= float(settings["highlight_luma_min"]))
         & (chroma <= float(settings["highlight_max_chroma"]))
         & (gradient <= float(settings["max_gradient"]) * float(settings["highlight_gradient_multiplier"]))
     )
+    shadow_mask = (
+        (luma <= float(settings["shadow_luma_max"]))
+        & (chroma <= float(settings["shadow_max_chroma"]))
+        & (gradient <= float(settings["max_gradient"]) * float(settings["shadow_gradient_multiplier"]))
+    )
+    edge_mask = (
+        (luma > 20)
+        & (luma < 235)
+        & (chroma <= float(settings["edge_max_chroma"]))
+        & (gradient >= float(settings["max_gradient"]) * float(settings["edge_min_gradient_multiplier"]))
+    )
+
+    output_ab = ab
+    output_ab = _apply_neutral_damping(
+        ab=output_ab,
+        mask=highlight_mask,
+        damping=float(settings["highlight_neutral_damping"]),
+        radius=int(settings["feather_radius"]),
+    )
+    output_ab = _apply_neutral_damping(
+        ab=output_ab,
+        mask=shadow_mask,
+        damping=float(settings["shadow_neutral_damping"]),
+        radius=int(settings["feather_radius"]),
+    )
+    return _apply_neutral_damping(
+        ab=output_ab,
+        mask=edge_mask,
+        damping=float(settings["edge_neutral_damping"]),
+        radius=max(3, int(settings["feather_radius"]) // 2),
+    )
+
+
+def _apply_neutral_damping(
+    *,
+    ab: np.ndarray,
+    mask: np.ndarray,
+    damping: float,
+    radius: int,
+) -> np.ndarray:
     if not np.any(mask):
         return ab
-    damping = float(np.clip(settings["highlight_neutral_damping"], 0.0, 1.0))
-    feather = _feather_mask(mask, radius=int(settings["feather_radius"]))
-    neutral_ab = 128.0 + (ab - 128.0) * damping
+    clipped_damping = float(np.clip(damping, 0.0, 1.0))
+    feather = _feather_mask(mask, radius=radius)
+    neutral_ab = 128.0 + (ab - 128.0) * clipped_damping
     return ab * (1.0 - feather[:, :, None]) + neutral_ab * feather[:, :, None]
 
 

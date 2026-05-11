@@ -38,96 +38,44 @@ def run_model_chroma_propagate(
     if width != int(model_info["width"]) or height != int(model_info["height"]):
         raise ValueError("Source and model color clips must have matching dimensions.")
 
-    source_frames = _read_frames(source_path, width=width, height=height)
-    model_frames = _read_frames(model_color_path, width=width, height=height)
-    frame_count = min(len(source_frames), len(model_frames))
-    source_frames = source_frames[:frame_count]
-    model_frames = model_frames[:frame_count]
-    if frame_count == 0:
-        raise ValueError("No frames available for chroma propagation.")
-
     started = time.perf_counter()
-    output_frames = _propagate_chroma(
-        source_frames=source_frames,
-        model_frames=model_frames,
-        chroma_blend=chroma_blend,
-    )
-    _write_frames(
+    frame_count = _stream_propagate_chroma(
+        source_path=source_path,
+        model_color_path=model_color_path,
         output_path=output_path,
-        frames=output_frames,
         width=width,
         height=height,
         fps=str(source_info["fps"]),
+        chroma_blend=chroma_blend,
         audio_input_path=source_path,
     )
+    if frame_count == 0:
+        raise ValueError("No frames available for chroma propagation.")
     print(f"Model chroma propagation written: {output_path}")
     print(f"Frames: {frame_count}")
-    print("Chroma mode: temporal-direct")
+    print("Chroma mode: temporal-direct-streaming")
     print(f"Runtime seconds: {time.perf_counter() - started:.2f}")
     return 0
 
 
-def _propagate_chroma(
+def _stream_propagate_chroma(
     *,
-    source_frames: list[np.ndarray],
-    model_frames: list[np.ndarray],
-    chroma_blend: float,
-) -> list[np.ndarray]:
-    output_frames: list[np.ndarray] = []
-    blend = float(np.clip(chroma_blend, 0.0, 1.0))
-    previous_ab: np.ndarray | None = None
-    for source_frame, model_frame in zip(source_frames, model_frames):
-        source_lab = cv2.cvtColor(source_frame, cv2.COLOR_RGB2LAB)
-        model_ab = cv2.cvtColor(model_frame, cv2.COLOR_RGB2LAB)[:, :, 1:3].astype(np.float32)
-        if previous_ab is None:
-            smoothed_ab = model_ab
-        else:
-            smoothed_ab = CHROMA_TEMPORAL_ALPHA * model_ab + (1.0 - CHROMA_TEMPORAL_ALPHA) * previous_ab
-        previous_ab = smoothed_ab
-        if blend >= 1.0:
-            source_lab[:, :, 1:3] = np.clip(smoothed_ab, 0, 255).astype(np.uint8)
-        else:
-            source_ab = source_lab[:, :, 1:3].astype(np.float32)
-            output_ab = (1.0 - blend) * source_ab + blend * smoothed_ab
-            source_lab[:, :, 1:3] = np.clip(output_ab, 0, 255).astype(np.uint8)
-        output_frames.append(cv2.cvtColor(source_lab, cv2.COLOR_LAB2RGB))
-    return output_frames
-
-
-def _read_frames(path: Path, *, width: int, height: int) -> list[np.ndarray]:
-    frame_bytes = width * height * 3
-    reader = open_rawvideo_reader(input_path=path)
-    if reader.stdout is None or reader.stderr is None:
-        raise RuntimeError("ffmpeg rawvideo reader failed to expose stdout/stderr pipes.")
-    frames: list[np.ndarray] = []
-    try:
-        while True:
-            frame_data = reader.stdout.read(frame_bytes)
-            if not frame_data:
-                break
-            if len(frame_data) != frame_bytes:
-                raise RuntimeError(f"Unexpected rawvideo frame size: {len(frame_data)}")
-            frames.append(np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3)).copy())
-        returncode = reader.wait()
-    finally:
-        if reader.stdout is not None:
-            reader.stdout.close()
-    if returncode != 0:
-        raise RuntimeError(f"ffmpeg rawvideo reader failed: {reader.stderr.read().decode().strip()}")
-    if reader.stderr is not None:
-        reader.stderr.close()
-    return frames
-
-
-def _write_frames(
-    *,
+    source_path: Path,
+    model_color_path: Path,
     output_path: Path,
-    frames: list[np.ndarray],
     width: int,
     height: int,
     fps: str,
+    chroma_blend: float,
     audio_input_path: Path,
-) -> None:
+) -> int:
+    frame_bytes = width * height * 3
+    blend = float(np.clip(chroma_blend, 0.0, 1.0))
+    previous_ab: np.ndarray | None = None
+    frame_count = 0
+
+    source_reader = open_rawvideo_reader(input_path=source_path)
+    model_reader = open_rawvideo_reader(input_path=model_color_path)
     writer = open_rawvideo_writer(
         output_path=output_path,
         width=width,
@@ -138,16 +86,94 @@ def _write_frames(
         pixel_format="yuv420p",
         audio_input_path=audio_input_path,
     )
-    if writer.stdin is None or writer.stderr is None:
-        raise RuntimeError("ffmpeg rawvideo writer failed to expose stdin/stderr pipes.")
+    _ensure_pipe(source_reader.stdout, source_reader.stderr, "source rawvideo reader")
+    _ensure_pipe(model_reader.stdout, model_reader.stderr, "model rawvideo reader")
+    _ensure_pipe(writer.stdin, writer.stderr, "rawvideo writer")
+
     try:
-        for frame in frames:
-            writer.stdin.write(np.ascontiguousarray(frame).tobytes())
+        while True:
+            source_data = _read_exact_or_none(source_reader.stdout, frame_bytes)
+            model_data = _read_exact_or_none(model_reader.stdout, frame_bytes)
+            if source_data is None or model_data is None:
+                break
+
+            source_frame = np.frombuffer(source_data, dtype=np.uint8).reshape((height, width, 3))
+            model_frame = np.frombuffer(model_data, dtype=np.uint8).reshape((height, width, 3))
+            output_frame, previous_ab = _propagate_chroma_frame(
+                source_frame=source_frame,
+                model_frame=model_frame,
+                previous_ab=previous_ab,
+                chroma_blend=blend,
+            )
+            writer.stdin.write(np.ascontiguousarray(output_frame).tobytes())
+            frame_count += 1
+
         writer.stdin.close()
-        returncode = writer.wait()
+        writer_returncode = writer.wait()
+        source_returncode = source_reader.wait()
+        model_returncode = model_reader.wait()
     finally:
-        if writer.stdin is not None:
-            writer.stdin.close()
-    if returncode != 0:
-        raise RuntimeError(f"ffmpeg rawvideo writer failed: {writer.stderr.read().decode().strip()}")
-    writer.stderr.close()
+        _close_pipe(source_reader.stdout)
+        _close_pipe(model_reader.stdout)
+        _close_pipe(writer.stdin)
+
+    if source_returncode != 0:
+        raise RuntimeError(f"ffmpeg source rawvideo reader failed: {_read_stderr(source_reader)}")
+    if model_returncode != 0:
+        raise RuntimeError(f"ffmpeg model rawvideo reader failed: {_read_stderr(model_reader)}")
+    if writer_returncode != 0:
+        raise RuntimeError(f"ffmpeg rawvideo writer failed: {_read_stderr(writer)}")
+    _close_pipe(source_reader.stderr)
+    _close_pipe(model_reader.stderr)
+    _close_pipe(writer.stderr)
+    return frame_count
+
+
+def _propagate_chroma_frame(
+    *,
+    source_frame: np.ndarray,
+    model_frame: np.ndarray,
+    previous_ab: np.ndarray | None,
+    chroma_blend: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    source_lab = cv2.cvtColor(source_frame, cv2.COLOR_RGB2LAB)
+    model_ab = cv2.cvtColor(model_frame, cv2.COLOR_RGB2LAB)[:, :, 1:3].astype(np.float32)
+    if previous_ab is None:
+        smoothed_ab = model_ab
+    else:
+        smoothed_ab = CHROMA_TEMPORAL_ALPHA * model_ab + (1.0 - CHROMA_TEMPORAL_ALPHA) * previous_ab
+    if chroma_blend >= 1.0:
+        source_lab[:, :, 1:3] = np.clip(smoothed_ab, 0, 255).astype(np.uint8)
+    else:
+        source_ab = source_lab[:, :, 1:3].astype(np.float32)
+        output_ab = (1.0 - chroma_blend) * source_ab + chroma_blend * smoothed_ab
+        source_lab[:, :, 1:3] = np.clip(output_ab, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(source_lab, cv2.COLOR_LAB2RGB), smoothed_ab
+
+
+def _read_exact_or_none(stream, size: int) -> bytes | None:
+    buffer = bytearray()
+    while len(buffer) < size:
+        chunk = stream.read(size - len(buffer))
+        if not chunk:
+            if not buffer:
+                return None
+            raise RuntimeError(f"Unexpected rawvideo frame size: {len(buffer)}")
+        buffer.extend(chunk)
+    return bytes(buffer)
+
+
+def _ensure_pipe(pipe, stderr, name: str) -> None:
+    if pipe is None or stderr is None:
+        raise RuntimeError(f"ffmpeg {name} failed to expose required pipes.")
+
+
+def _close_pipe(pipe) -> None:
+    if pipe is not None and not pipe.closed:
+        pipe.close()
+
+
+def _read_stderr(process) -> str:
+    if process.stderr is None:
+        return ""
+    return process.stderr.read().decode().strip()

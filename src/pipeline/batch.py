@@ -89,7 +89,7 @@ def run_colorize_batch(
 
         if (
             resume
-            and _is_usable_video(colorized_clip_path)
+            and _is_usable_video(colorized_clip_path, reference_path=scene_clip_path)
             and (
                 existing_status is None
                 or existing_status.get("status") == "succeeded"
@@ -97,22 +97,23 @@ def run_colorize_batch(
             )
         ):
             print(f"Skipping completed scene: {scene_id}")
-            _upsert_scene_status(
-                batch_payload,
-                BatchSceneStatus(
-                    scene_id=scene_id,
-                    input_clip=str(scene_clip_path),
-                    output_clip=str(colorized_clip_path),
-                    status="succeeded",
-                    runtime_seconds=0.0,
-                    stage_runtime_seconds={
-                        "scene_extraction": 0.0,
-                        "deoldify": 0.0,
-                        "ddcolor": 0.0,
-                        "chroma_propagation": 0.0,
-                    },
-                ),
-            )
+            if existing_status is None or existing_status.get("status") != "succeeded":
+                _upsert_scene_status(
+                    batch_payload,
+                    BatchSceneStatus(
+                        scene_id=scene_id,
+                        input_clip=str(scene_clip_path),
+                        output_clip=str(colorized_clip_path),
+                        status="succeeded",
+                        runtime_seconds=0.0,
+                        stage_runtime_seconds={
+                            "scene_extraction": 0.0,
+                            "deoldify": 0.0,
+                            "ddcolor": 0.0,
+                            "chroma_propagation": 0.0,
+                        },
+                    ),
+                )
             _refresh_batch_summary(batch_payload, expected_scene_count=len(scenes))
             write_json_manifest(batch_manifest_path, batch_payload)
             continue
@@ -136,7 +137,7 @@ def run_colorize_batch(
             else:
                 stage_runtimes["scene_extraction"] = 0.0
 
-            if resume and _is_usable_video(deoldify_clip_path):
+            if resume and _is_usable_video(deoldify_clip_path, reference_path=scene_clip_path):
                 print(f"Reusing DeOldify clip: {deoldify_clip_path.name}")
                 stage_runtimes["deoldify"] = 0.0
             else:
@@ -152,10 +153,11 @@ def run_colorize_batch(
                     manifest_path=scene_runs_manifest_path,
                     overwrite=True,
                     model_bundle=shared_bundle,
+                    include_audio=False,
                 )
                 stage_runtimes["deoldify"] = time.perf_counter() - stage_started
 
-            if resume and _is_usable_video(ddcolor_clip_path):
+            if resume and _is_usable_video(ddcolor_clip_path, reference_path=scene_clip_path):
                 print(f"Reusing DDColor clip: {ddcolor_clip_path.name}")
                 stage_runtimes["ddcolor"] = 0.0
             else:
@@ -168,6 +170,7 @@ def run_colorize_batch(
                     device="auto",
                     output_preset="ultrafast",
                     overwrite=True,
+                    include_audio=False,
                 )
                 stage_runtimes["ddcolor"] = time.perf_counter() - stage_started
 
@@ -178,6 +181,7 @@ def run_colorize_batch(
                 output_path=colorized_clip_path,
                 keyframe_stride=35,
                 chroma_blend=1.0,
+                audio_input_path=scene_clip_path,
                 overwrite=True,
             )
             stage_runtimes["chroma_propagation"] = time.perf_counter() - stage_started
@@ -302,11 +306,23 @@ def _sum_stage_runtimes(runs: list[dict[str, Any]]) -> dict[str, float]:
     return {stage_name: round(runtime_seconds, 3) for stage_name, runtime_seconds in totals.items()}
 
 
-def _is_usable_video(path: Path) -> bool:
+def _is_usable_video(path: Path, *, reference_path: Path | None = None) -> bool:
     if not path.exists() or path.stat().st_size <= 0:
         return False
     try:
         media_info = ffprobe_media(path)
+        reference_info = ffprobe_media(reference_path) if reference_path is not None and reference_path.exists() else None
     except Exception:
         return False
-    return float(media_info["duration_seconds"]) > 0.0
+    if float(media_info["duration_seconds"]) <= 0.0:
+        return False
+    if reference_info is None:
+        return True
+
+    frame_count = int(media_info.get("frame_count", 0))
+    reference_frame_count = int(reference_info.get("frame_count", 0))
+    if frame_count > 0 and reference_frame_count > 0:
+        return frame_count == reference_frame_count
+
+    duration_delta = abs(float(media_info["duration_seconds"]) - float(reference_info["duration_seconds"]))
+    return duration_delta <= 0.05

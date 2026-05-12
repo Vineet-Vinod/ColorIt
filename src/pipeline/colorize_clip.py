@@ -37,6 +37,7 @@ def run_colorize_clip(
     manifest_path: Path | None,
     overwrite: bool,
     model_bundle: ModelBundle | None = None,
+    include_audio: bool = True,
 ) -> int:
     paths = resolve_project_paths(config)
     ensure_runtime_directories(paths)
@@ -64,6 +65,7 @@ def run_colorize_clip(
         media_info=media_info,
         config=config,
         bundle=bundle,
+        include_audio=include_audio,
     )
     runtime_seconds = time.perf_counter() - started
 
@@ -99,6 +101,7 @@ def _run_pipe_transport(
     media_info: dict[str, str | int | float],
     config: AppConfig,
     bundle: ModelBundle,
+    include_audio: bool,
 ) -> int:
     width = int(media_info["width"])
     height = int(media_info["height"])
@@ -114,7 +117,7 @@ def _run_pipe_transport(
         video_codec=str(config.raw["video"]["output_codec"]),
         crf=int(config.raw["video"]["crf"]),
         pixel_format=str(config.raw["video"]["pixel_format"]),
-        audio_input_path=input_path,
+        audio_input_path=input_path if include_audio else None,
     )
     if reader.stdout is None or reader.stderr is None:
         raise RuntimeError("ffmpeg rawvideo reader failed to expose stdout/stderr pipes.")

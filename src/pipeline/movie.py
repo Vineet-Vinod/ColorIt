@@ -152,6 +152,7 @@ def run_colorize_movie(
         movie_run_manifest["status"] = "succeeded"
         movie_run_manifest["updated_at"] = utc_now_iso()
         movie_run_manifest["completed_at"] = utc_now_iso()
+        movie_run_manifest.pop("error", None)
         write_json_manifest(movie_run_manifest_path, movie_run_manifest)
     except Exception as exc:
         failing_stage = _current_movie_stage(movie_run_manifest)
@@ -330,10 +331,12 @@ def _mark_movie_stage(
 ) -> None:
     stages = payload.setdefault("stages", {})
     stage_payload = stages.setdefault(stage, {})
+    previous_status = stage_payload.get("status")
     stage_payload["status"] = status
     stage_payload["updated_at"] = utc_now_iso()
     if status == "running":
-        stage_payload["started_at"] = stage_payload.get("started_at", utc_now_iso())
+        if previous_status != "running":
+            stage_payload["started_at"] = utc_now_iso()
         stage_payload.pop("error", None)
     if status == "succeeded":
         stage_payload["completed_at"] = utc_now_iso()

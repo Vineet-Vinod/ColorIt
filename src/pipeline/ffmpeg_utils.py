@@ -84,6 +84,7 @@ def ffprobe_media(path: Path) -> dict[str, str | int | float]:
         "fps": str(video_stream["avg_frame_rate"]),
         "width": int(video_stream["width"]),
         "height": int(video_stream["height"]),
+        "frame_count": _parse_frame_count(video_stream),
     }
 
 
@@ -213,7 +214,7 @@ def open_rawvideo_writer(
         ]
     )
     if audio_input_path is not None:
-        command.extend(["-c:a", "aac", "-b:a", "192k", "-shortest"])
+        command.extend(["-c:a", "aac", "-b:a", "192k", "-af", "apad", "-shortest"])
     command.append(str(output_path))
     return subprocess.Popen(
         command,
@@ -290,6 +291,16 @@ def output_fps_filter(value: str) -> str | None:
     if fps > MAX_OUTPUT_FPS:
         return f"fps={int(MAX_OUTPUT_FPS)}"
     return None
+
+
+def _parse_frame_count(video_stream: dict) -> int:
+    frame_count = video_stream.get("nb_frames")
+    if frame_count is None or frame_count == "N/A":
+        return 0
+    try:
+        return int(frame_count)
+    except ValueError:
+        return 0
 
 
 def _run(command: list[str]) -> None:

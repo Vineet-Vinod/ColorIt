@@ -27,6 +27,7 @@ def run_ddcolor_clip(
     device: str,
     output_preset: str,
     overwrite: bool,
+    include_audio: bool = True,
 ) -> int:
     input_path = input_path.expanduser().resolve()
     output_path = output_path.expanduser().resolve()
@@ -66,7 +67,7 @@ def run_ddcolor_clip(
         crf=16,
         pixel_format="yuv420p",
         preset=output_preset,
-        audio_input_path=input_path,
+        audio_input_path=input_path if include_audio else None,
     )
     if reader.stdout is None or reader.stderr is None:
         raise RuntimeError("ffmpeg rawvideo reader failed to expose stdout/stderr pipes.")

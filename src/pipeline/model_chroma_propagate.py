@@ -19,6 +19,7 @@ def run_model_chroma_propagate(
     output_path: Path,
     keyframe_stride: int,
     chroma_blend: float,
+    audio_input_path: Path | None = None,
     overwrite: bool,
 ) -> int:
     source_path = source_path.expanduser().resolve()
@@ -47,7 +48,7 @@ def run_model_chroma_propagate(
         height=height,
         fps=str(source_info["fps"]),
         chroma_blend=chroma_blend,
-        audio_input_path=source_path,
+        audio_input_path=audio_input_path.expanduser().resolve() if audio_input_path is not None else source_path,
     )
     if frame_count == 0:
         raise ValueError("No frames available for chroma propagation.")

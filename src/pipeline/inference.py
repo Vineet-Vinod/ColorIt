@@ -50,14 +50,21 @@ def colorize_rgb_batch(
         gray_input = cv2.cvtColor(model_input, cv2.COLOR_RGB2GRAY)
         processed_inputs.append(cv2.cvtColor(gray_input, cv2.COLOR_GRAY2RGB))
 
-    tensor = torch.from_numpy(np.stack(processed_inputs)).permute(0, 3, 1, 2).float() / 255.0
-    tensor = (tensor - IMAGENET_MEAN) / IMAGENET_STD
-    tensor = tensor.to(model_bundle.device)
+    tensor = (
+        torch.from_numpy(np.stack(processed_inputs))
+        .permute(0, 3, 1, 2)
+        .float()
+        .to(model_bundle.device)
+        / 255.0
+    )
+    mean = IMAGENET_MEAN.to(model_bundle.device)
+    std = IMAGENET_STD.to(model_bundle.device)
+    tensor = (tensor - mean) / std
 
-    with torch.no_grad():
+    with torch.inference_mode():
         outputs = model_bundle.model(tensor)
 
-    outputs = (outputs * IMAGENET_STD.to(outputs.device)) + IMAGENET_MEAN.to(outputs.device)
+    outputs = (outputs * std) + mean
     outputs = outputs.clamp(0.0, 1.0)
 
     results: list[np.ndarray] = []

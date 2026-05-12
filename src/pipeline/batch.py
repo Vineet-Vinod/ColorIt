@@ -5,7 +5,6 @@ from pathlib import Path
 import time
 from typing import Any
 
-from src.pipeline.background_stabilize import DEFAULT_BACKGROUND_STABILIZATION, run_background_stabilize
 from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import AppConfig
 from src.pipeline.ddcolor_clip import DEFAULT_DDCOLOR_WEIGHTS_PATH, run_ddcolor_clip
@@ -86,7 +85,6 @@ def run_colorize_batch(
         deoldify_clip_path = deoldify_output_dir / f"{scene_id}.mp4"
         ddcolor_clip_path = ddcolor_output_dir / f"{scene_id}.mp4"
         colorized_clip_path = colorized_output_dir / f"{scene_id}.mp4"
-        propagated_clip_path = colorized_output_dir / f"{scene_id}.propagated.mp4"
         existing_status = _get_scene_status(batch_payload, scene_id)
 
         if (
@@ -133,23 +131,11 @@ def run_colorize_batch(
             run_model_chroma_propagate(
                 source_path=deoldify_clip_path,
                 model_color_path=ddcolor_clip_path,
-                output_path=propagated_clip_path,
+                output_path=colorized_clip_path,
                 keyframe_stride=35,
                 chroma_blend=1.0,
                 overwrite=True,
             )
-            background_settings = _background_stabilization_settings(config.raw)
-            if bool(background_settings.get("enabled", True)):
-                run_background_stabilize(
-                    input_path=propagated_clip_path,
-                    output_path=colorized_clip_path,
-                    settings=background_settings,
-                    overwrite=True,
-                )
-                if propagated_clip_path.exists():
-                    propagated_clip_path.unlink()
-            else:
-                propagated_clip_path.replace(colorized_clip_path)
             status = BatchSceneStatus(
                 scene_id=scene_id,
                 input_clip=str(scene_clip_path),
@@ -255,11 +241,3 @@ def _refresh_batch_summary(payload: dict[str, Any], *, expected_scene_count: int
     payload["succeeded_scene_count"] = succeeded
     payload["failed_scene_count"] = failed
     payload["remaining_scene_count"] = remaining
-
-
-def _background_stabilization_settings(config_payload: dict[str, Any]) -> dict[str, object]:
-    settings = dict(DEFAULT_BACKGROUND_STABILIZATION)
-    raw_settings = config_payload.get("background_stabilization", {})
-    if isinstance(raw_settings, dict):
-        settings.update(raw_settings)
-    return settings

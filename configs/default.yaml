@@ -26,20 +26,6 @@ compression:
   audio_bitrate: 160k
   faststart: true
 
-background_stabilization:
-  enabled: true
-  strength: 0.85
-  chroma_damping: 0.55
-  min_mask_fraction: 0.06
-  max_chroma: 64.0
-  highlight_luma_min: 120.0
-  highlight_max_chroma: 180.0
-  highlight_neutral_damping: 0.15
-  highlight_gradient_multiplier: 3.0
-  max_gradient: 7.5
-  shot_change_threshold: 18.0
-  feather_radius: 9
-
 scenes:
   detect: true
   threshold: 0.60

@@ -8,7 +8,7 @@ from typing import Any
 from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import AppConfig
 from src.pipeline.ddcolor_clip import DEFAULT_DDCOLOR_WEIGHTS_PATH, run_ddcolor_clip
-from src.pipeline.ffmpeg_utils import extract_clip
+from src.pipeline.ffmpeg_utils import extract_clip, ffprobe_media
 from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
 from src.pipeline.model_chroma_propagate import run_model_chroma_propagate
 from src.pipeline.model_loader import load_colorizer_bundle
@@ -77,8 +77,7 @@ def run_colorize_batch(
     print(f"Scene manifest: {scene_manifest_path}")
     print(f"Batch scene count: {len(scenes)}")
     print(f"Resume mode: {resume}")
-    print("Loading colorizer model once for batch reuse...")
-    shared_bundle = load_colorizer_bundle(config)
+    shared_bundle = None
 
     for scene in scenes:
         scene_id = scene["scene_id"]
@@ -90,17 +89,38 @@ def run_colorize_batch(
 
         if (
             resume
-            and existing_status is not None
-            and existing_status.get("status") == "succeeded"
-            and colorized_clip_path.exists()
+            and _is_usable_video(colorized_clip_path)
+            and (
+                existing_status is None
+                or existing_status.get("status") == "succeeded"
+                or existing_status.get("output_clip") == str(colorized_clip_path)
+            )
         ):
             print(f"Skipping completed scene: {scene_id}")
+            _upsert_scene_status(
+                batch_payload,
+                BatchSceneStatus(
+                    scene_id=scene_id,
+                    input_clip=str(scene_clip_path),
+                    output_clip=str(colorized_clip_path),
+                    status="succeeded",
+                    runtime_seconds=0.0,
+                    stage_runtime_seconds={
+                        "scene_extraction": 0.0,
+                        "deoldify": 0.0,
+                        "ddcolor": 0.0,
+                        "chroma_propagation": 0.0,
+                    },
+                ),
+            )
+            _refresh_batch_summary(batch_payload, expected_scene_count=len(scenes))
+            write_json_manifest(batch_manifest_path, batch_payload)
             continue
 
         started = time.perf_counter()
         stage_runtimes: dict[str, float] = {}
         try:
-            if not scene_clip_path.exists():
+            if not _is_usable_video(scene_clip_path):
                 stage_started = time.perf_counter()
                 extract_clip(
                     input_path=movie_path,
@@ -116,29 +136,40 @@ def run_colorize_batch(
             else:
                 stage_runtimes["scene_extraction"] = 0.0
 
-            stage_started = time.perf_counter()
-            run_colorize_clip(
-                config=config,
-                config_path=config_path,
-                input_path=scene_clip_path,
-                output_path=deoldify_clip_path,
-                manifest_path=scene_runs_manifest_path,
-                overwrite=True,
-                model_bundle=shared_bundle,
-            )
-            stage_runtimes["deoldify"] = time.perf_counter() - stage_started
+            if resume and _is_usable_video(deoldify_clip_path):
+                print(f"Reusing DeOldify clip: {deoldify_clip_path.name}")
+                stage_runtimes["deoldify"] = 0.0
+            else:
+                if shared_bundle is None:
+                    print("Loading colorizer model once for batch reuse...")
+                    shared_bundle = load_colorizer_bundle(config)
+                stage_started = time.perf_counter()
+                run_colorize_clip(
+                    config=config,
+                    config_path=config_path,
+                    input_path=scene_clip_path,
+                    output_path=deoldify_clip_path,
+                    manifest_path=scene_runs_manifest_path,
+                    overwrite=True,
+                    model_bundle=shared_bundle,
+                )
+                stage_runtimes["deoldify"] = time.perf_counter() - stage_started
 
-            stage_started = time.perf_counter()
-            run_ddcolor_clip(
-                input_path=scene_clip_path,
-                output_path=ddcolor_clip_path,
-                weights_path=paths.root / DEFAULT_DDCOLOR_WEIGHTS_PATH,
-                input_size=256,
-                device="auto",
-                output_preset="ultrafast",
-                overwrite=True,
-            )
-            stage_runtimes["ddcolor"] = time.perf_counter() - stage_started
+            if resume and _is_usable_video(ddcolor_clip_path):
+                print(f"Reusing DDColor clip: {ddcolor_clip_path.name}")
+                stage_runtimes["ddcolor"] = 0.0
+            else:
+                stage_started = time.perf_counter()
+                run_ddcolor_clip(
+                    input_path=scene_clip_path,
+                    output_path=ddcolor_clip_path,
+                    weights_path=paths.root / DEFAULT_DDCOLOR_WEIGHTS_PATH,
+                    input_size=256,
+                    device="auto",
+                    output_preset="ultrafast",
+                    overwrite=True,
+                )
+                stage_runtimes["ddcolor"] = time.perf_counter() - stage_started
 
             stage_started = time.perf_counter()
             run_model_chroma_propagate(
@@ -269,3 +300,13 @@ def _sum_stage_runtimes(runs: list[dict[str, Any]]) -> dict[str, float]:
         for stage_name, runtime_seconds in stage_runtimes.items():
             totals[stage_name] = totals.get(stage_name, 0.0) + float(runtime_seconds)
     return {stage_name: round(runtime_seconds, 3) for stage_name, runtime_seconds in totals.items()}
+
+
+def _is_usable_video(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size <= 0:
+        return False
+    try:
+        media_info = ffprobe_media(path)
+    except Exception:
+        return False
+    return float(media_info["duration_seconds"]) > 0.0

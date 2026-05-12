@@ -11,10 +11,10 @@ from src.pipeline.ffmpeg_utils import ffprobe_media, open_rawvideo_reader, open_
 
 DEFAULT_BACKGROUND_CHROMA_HOLD = {
     "enabled": True,
-    "blend": 0.42,
-    "update_alpha": 0.08,
-    "luma_tolerance": 7.0,
-    "previous_luma_tolerance": 5.0,
+    "blend": 0.72,
+    "update_alpha": 0.035,
+    "luma_tolerance": 10.0,
+    "previous_luma_tolerance": 8.0,
     "shot_change_threshold": 18.0,
     "min_luma": 25.0,
     "max_luma": 245.0,
@@ -23,7 +23,7 @@ DEFAULT_BACKGROUND_CHROMA_HOLD = {
     "skin_min_b": 130.0,
     "skin_max_b": 178.0,
     "skin_min_chroma": 6.0,
-    "feather_radius": 7,
+    "feather_radius": 11,
 }
 
 

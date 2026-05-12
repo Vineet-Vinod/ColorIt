@@ -43,15 +43,6 @@ background_stabilization:
   edge_min_gradient_multiplier: 3.2
   edge_max_chroma: 88.0
   edge_neutral_damping: 0.68
-  static_enabled: true
-  static_luma_tolerance: 10.0
-  static_update_alpha: 0.04
-  static_min_confidence: 0.25
-  static_chroma_blend: 0.82
-  static_confidence_gain: 0.08
-  static_confidence_decay: 0.05
-  static_reference_update_alpha: 0.01
-  static_max_chroma: 190.0
   max_gradient: 7.5
   shot_change_threshold: 18.0
   feather_radius: 9

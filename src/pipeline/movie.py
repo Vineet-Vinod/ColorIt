@@ -263,6 +263,21 @@ def _compress_final_movie(
     source_size_bytes = source_movie_path.stat().st_size
     max_size_multiplier = float(compression_config.get("max_size_multiplier", 2.0))
     max_size_bytes = int(source_size_bytes * max_size_multiplier)
+    input_size_bytes = input_path.stat().st_size
+    if input_size_bytes <= max_size_bytes:
+        if output_path.exists():
+            output_path.unlink()
+        shutil.move(str(input_path), str(output_path))
+        print(f"Final movie already within size target; skipped compression: {output_path}")
+        return {
+            "output_path": str(output_path),
+            "source_size_bytes": source_size_bytes,
+            "final_size_bytes": output_path.stat().st_size,
+            "max_size_bytes": max_size_bytes,
+            "selected_crf": None,
+            "within_size_target": True,
+            "skipped_reencode": True,
+        }
 
     final_size_bytes = 0
     selected_crf = crfs[-1]
@@ -301,6 +316,7 @@ def _compress_final_movie(
         "max_size_bytes": max_size_bytes,
         "selected_crf": selected_crf,
         "within_size_target": within_target,
+        "skipped_reencode": False,
     }
 
 

@@ -38,6 +38,36 @@ DEFAULT_BACKGROUND_STABILIZATION = {
     "max_gradient": 7.5,
     "shot_change_threshold": 18.0,
     "feather_radius": 9,
+    "skin_protection_enabled": True,
+    "skin_protection_min_luma": 55.0,
+    "skin_protection_max_luma": 225.0,
+    "skin_protection_min_a": 130.0,
+    "skin_protection_max_a": 170.0,
+    "skin_protection_min_b": 130.0,
+    "skin_protection_max_b": 178.0,
+    "skin_protection_min_chroma": 6.0,
+    "skin_recovery_enabled": True,
+    "skin_recovery_blend": 0.22,
+    "skin_recovery_lower_fraction": 0.80,
+    "skin_recovery_target_a": 139.0,
+    "skin_recovery_target_b": 145.0,
+    "sky_restore_enabled": True,
+    "sky_restore_upper_fraction": 0.68,
+    "sky_restore_min_luma": 135.0,
+    "sky_restore_max_chroma": 44.0,
+    "sky_restore_max_gradient": 8.0,
+    "sky_restore_min_fraction": 0.03,
+    "sky_restore_blend": 0.52,
+    "sky_restore_target_a": 126.0,
+    "sky_restore_target_b": 114.0,
+    "foreground_chroma_boost_enabled": True,
+    "foreground_chroma_boost": 1.22,
+    "foreground_chroma_min": 8.0,
+    "foreground_chroma_max": 92.0,
+    "foreground_chroma_cap": 105.0,
+    "foreground_min_luma": 34.0,
+    "foreground_max_luma": 218.0,
+    "foreground_min_gradient": 10.0,
 }
 
 
@@ -127,6 +157,7 @@ def _measure_background_chroma(
                 highlight_luma_min=float(settings["highlight_luma_min"]),
                 highlight_max_chroma=float(settings["highlight_max_chroma"]),
                 max_gradient=float(settings["max_gradient"]),
+                settings=settings,
             )
             mask_fraction = float(mask.mean())
             mean_ab = _masked_mean_ab(ab=ab, mask=mask, fallback=np.array([128.0, 128.0], dtype=np.float32))
@@ -351,6 +382,7 @@ def _stabilize_frame(
         highlight_luma_min=float(settings["highlight_luma_min"]),
         highlight_max_chroma=float(settings["highlight_max_chroma"]),
         max_gradient=float(settings["max_gradient"]),
+        settings=settings,
     )
 
     if float(mask.mean()) >= float(settings["min_mask_fraction"]):
@@ -375,6 +407,18 @@ def _stabilize_frame(
         lab_float=lab_float,
         settings=settings,
     )
+    lab_float[:, :, 1:3] = _recover_skin_chroma(
+        lab_float=lab_float,
+        settings=settings,
+    )
+    lab_float[:, :, 1:3] = _restore_sky_chroma(
+        lab_float=lab_float,
+        settings=settings,
+    )
+    lab_float[:, :, 1:3] = _boost_foreground_chroma(
+        lab_float=lab_float,
+        settings=settings,
+    )
     return cv2.cvtColor(np.clip(lab_float, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
 
 
@@ -391,6 +435,7 @@ def _apply_static_chroma_anchor(
     confident = confidence >= float(settings["static_min_confidence"])
     chroma = np.linalg.norm(ab - 128.0, axis=2)
     mask = luma_match & confident & (chroma <= float(settings["static_max_chroma"]))
+    mask &= ~_skin_protection_mask(lab_float=lab_float, settings=settings)
     if not np.any(mask):
         return ab
     alpha = _feather_mask(mask, radius=max(3, int(settings["feather_radius"]) // 2))
@@ -425,6 +470,11 @@ def _neutralize_unstable_chroma(
         & (chroma <= float(settings["edge_max_chroma"]))
         & (gradient >= float(settings["max_gradient"]) * float(settings["edge_min_gradient_multiplier"]))
     )
+    protected_mask = _skin_protection_mask(lab_float=lab_float, settings=settings)
+    if np.any(protected_mask):
+        highlight_mask &= ~protected_mask
+        shadow_mask &= ~protected_mask
+        edge_mask &= ~protected_mask
 
     output_ab = ab
     output_ab = _apply_neutral_damping(
@@ -462,6 +512,111 @@ def _apply_neutral_damping(
     return ab * (1.0 - feather[:, :, None]) + neutral_ab * feather[:, :, None]
 
 
+def _recover_skin_chroma(
+    *,
+    lab_float: np.ndarray,
+    settings: dict[str, object],
+) -> np.ndarray:
+    if not bool(settings.get("skin_recovery_enabled", False)):
+        return lab_float[:, :, 1:3]
+
+    luma = lab_float[:, :, 0]
+    ab = lab_float[:, :, 1:3]
+    chroma = np.linalg.norm(ab - 128.0, axis=2)
+    gradient_x = cv2.Sobel(luma.astype(np.uint8), cv2.CV_32F, 1, 0, ksize=3)
+    gradient_y = cv2.Sobel(luma.astype(np.uint8), cv2.CV_32F, 0, 1, ksize=3)
+    gradient = np.sqrt(gradient_x * gradient_x + gradient_y * gradient_y)
+    existing_skin = _skin_protection_mask(lab_float=lab_float, settings=settings)
+    height = luma.shape[0]
+    recovery_lower_limit = max(1, int(height * float(settings["skin_recovery_lower_fraction"])))
+    recovery_region = np.zeros_like(luma, dtype=bool)
+    recovery_region[:recovery_lower_limit, :] = True
+    pale_skin = (
+        recovery_region
+        & (luma >= float(settings["skin_protection_min_luma"]))
+        & (luma <= float(settings["skin_protection_max_luma"]))
+        & (chroma <= 24.0)
+        & (gradient >= 8.0)
+        & ~_sky_candidate_mask(lab_float=lab_float, settings=settings)
+    )
+    mask = existing_skin | pale_skin
+    if not np.any(mask):
+        return ab
+
+    alpha = _feather_mask(mask, radius=max(3, int(settings["feather_radius"]) // 2))
+    alpha *= float(np.clip(settings["skin_recovery_blend"], 0.0, 1.0))
+    target_ab = np.array(
+        [float(settings["skin_recovery_target_a"]), float(settings["skin_recovery_target_b"])],
+        dtype=np.float32,
+    )
+    return ab * (1.0 - alpha[:, :, None]) + target_ab * alpha[:, :, None]
+
+
+def _restore_sky_chroma(
+    *,
+    lab_float: np.ndarray,
+    settings: dict[str, object],
+) -> np.ndarray:
+    if not bool(settings.get("sky_restore_enabled", False)):
+        return lab_float[:, :, 1:3]
+
+    ab = lab_float[:, :, 1:3]
+    mask = _sky_candidate_mask(lab_float=lab_float, settings=settings)
+    if float(mask.mean()) < float(settings["sky_restore_min_fraction"]):
+        return ab
+    kernel = np.ones((5, 5), dtype=np.uint8)
+    mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, kernel).astype(bool)
+    if float(mask.mean()) < float(settings["sky_restore_min_fraction"]):
+        return ab
+
+    luma = lab_float[:, :, 0]
+    alpha = _feather_mask(mask, radius=max(9, int(settings["feather_radius"]) * 2))
+    luma_weight = np.clip((luma - float(settings["sky_restore_min_luma"])) / 80.0, 0.0, 1.0)
+    alpha *= luma_weight * float(np.clip(settings["sky_restore_blend"], 0.0, 1.0))
+    target_ab = np.array(
+        [float(settings["sky_restore_target_a"]), float(settings["sky_restore_target_b"])],
+        dtype=np.float32,
+    )
+    return ab * (1.0 - alpha[:, :, None]) + target_ab * alpha[:, :, None]
+
+
+def _boost_foreground_chroma(
+    *,
+    lab_float: np.ndarray,
+    settings: dict[str, object],
+) -> np.ndarray:
+    if not bool(settings.get("foreground_chroma_boost_enabled", False)):
+        return lab_float[:, :, 1:3]
+
+    luma = lab_float[:, :, 0]
+    ab = lab_float[:, :, 1:3]
+    delta = ab - 128.0
+    chroma = np.linalg.norm(delta, axis=2)
+    gradient_x = cv2.Sobel(luma.astype(np.uint8), cv2.CV_32F, 1, 0, ksize=3)
+    gradient_y = cv2.Sobel(luma.astype(np.uint8), cv2.CV_32F, 0, 1, ksize=3)
+    gradient = np.sqrt(gradient_x * gradient_x + gradient_y * gradient_y)
+    mask = (
+        (luma >= float(settings["foreground_min_luma"]))
+        & (luma <= float(settings["foreground_max_luma"]))
+        & (chroma >= float(settings["foreground_chroma_min"]))
+        & (chroma <= float(settings["foreground_chroma_max"]))
+        & (gradient >= float(settings["foreground_min_gradient"]))
+        & ~_skin_protection_mask(lab_float=lab_float, settings=settings)
+        & ~_sky_candidate_mask(lab_float=lab_float, settings=settings)
+    )
+    if not np.any(mask):
+        return ab
+
+    alpha = _feather_mask(mask, radius=max(3, int(settings["feather_radius"]) // 2))
+    boost = float(settings["foreground_chroma_boost"])
+    boosted_delta = delta * boost
+    boosted_chroma = np.linalg.norm(boosted_delta, axis=2)
+    cap = float(settings["foreground_chroma_cap"])
+    scale = np.minimum(1.0, cap / np.maximum(boosted_chroma, 1.0))
+    boosted_ab = 128.0 + boosted_delta * scale[:, :, None]
+    return ab * (1.0 - alpha[:, :, None]) + boosted_ab * alpha[:, :, None]
+
+
 def _background_mask(
     *,
     lab: np.ndarray,
@@ -469,6 +624,7 @@ def _background_mask(
     highlight_luma_min: float,
     highlight_max_chroma: float,
     max_gradient: float,
+    settings: dict[str, object],
 ) -> np.ndarray:
     luma = lab[:, :, 0]
     ab = lab[:, :, 1:3].astype(np.float32)
@@ -480,10 +636,58 @@ def _background_mask(
     low_chroma_background = chroma <= max_chroma
     bright_overcolored_background = (luma >= highlight_luma_min) & (chroma <= highlight_max_chroma)
     mask = (luma > 35) & (luma < 245) & flat & (low_chroma_background | bright_overcolored_background)
+    mask &= ~_skin_protection_mask(lab_float=lab.astype(np.float32), settings=settings)
     mask = mask.astype(np.uint8)
     kernel = np.ones((3, 3), dtype=np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     return mask.astype(bool)
+
+
+def _skin_protection_mask(
+    *,
+    lab_float: np.ndarray,
+    settings: dict[str, object],
+) -> np.ndarray:
+    if not bool(settings.get("skin_protection_enabled", False)):
+        return np.zeros(lab_float.shape[:2], dtype=bool)
+    luma = lab_float[:, :, 0]
+    a = lab_float[:, :, 1]
+    b = lab_float[:, :, 2]
+    chroma = np.sqrt((a - 128.0) * (a - 128.0) + (b - 128.0) * (b - 128.0))
+    mask = (
+        (luma >= float(settings["skin_protection_min_luma"]))
+        & (luma <= float(settings["skin_protection_max_luma"]))
+        & (a >= float(settings["skin_protection_min_a"]))
+        & (a <= float(settings["skin_protection_max_a"]))
+        & (b >= float(settings["skin_protection_min_b"]))
+        & (b <= float(settings["skin_protection_max_b"]))
+        & (chroma >= float(settings["skin_protection_min_chroma"]))
+    )
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    return cv2.dilate(mask.astype(np.uint8), kernel, iterations=1).astype(bool)
+
+
+def _sky_candidate_mask(
+    *,
+    lab_float: np.ndarray,
+    settings: dict[str, object],
+) -> np.ndarray:
+    luma = lab_float[:, :, 0]
+    ab = lab_float[:, :, 1:3]
+    chroma = np.linalg.norm(ab - 128.0, axis=2)
+    gradient_x = cv2.Sobel(luma.astype(np.uint8), cv2.CV_32F, 1, 0, ksize=3)
+    gradient_y = cv2.Sobel(luma.astype(np.uint8), cv2.CV_32F, 0, 1, ksize=3)
+    gradient = np.sqrt(gradient_x * gradient_x + gradient_y * gradient_y)
+    height = luma.shape[0]
+    upper_limit = max(1, int(height * float(settings["sky_restore_upper_fraction"])))
+    upper_mask = np.zeros_like(luma, dtype=bool)
+    upper_mask[:upper_limit, :] = True
+    return (
+        upper_mask
+        & (luma >= float(settings["sky_restore_min_luma"]))
+        & (chroma <= float(settings["sky_restore_max_chroma"]))
+        & (gradient <= float(settings["sky_restore_max_gradient"]))
+    )
 
 
 def _feather_mask(mask: np.ndarray, *, radius: int) -> np.ndarray:

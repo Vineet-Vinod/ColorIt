@@ -3,6 +3,7 @@ from __future__ import annotations
 from hashlib import sha1
 from pathlib import Path
 import shutil
+import time
 from typing import Any
 
 from src.pipeline.assemble import run_assemble_final
@@ -68,12 +69,19 @@ def run_colorize_movie(
         ):
             print(f"Reusing existing scene manifest: {scene_manifest_path}")
         else:
+            stage_started = time.perf_counter()
             run_detect_scenes(
                 config=config,
                 config_path=config_path,
                 movie_path=movie_path,
                 output_path=scene_manifest_path,
                 threshold=threshold,
+            )
+            _mark_movie_stage(
+                movie_run_manifest,
+                stage="scene_detection",
+                status="running",
+                runtime_seconds=round(time.perf_counter() - stage_started, 3),
             )
 
         scene_manifest = load_scene_manifest(scene_manifest_path)
@@ -88,6 +96,7 @@ def run_colorize_movie(
 
         _mark_movie_stage(movie_run_manifest, stage="batch_colorize", status="running")
         write_json_manifest(movie_run_manifest_path, movie_run_manifest)
+        stage_started = time.perf_counter()
         run_colorize_batch(
             config=config,
             config_path=config_path,
@@ -96,7 +105,12 @@ def run_colorize_movie(
             resume=resume,
             limit=limit,
         )
-        _mark_movie_stage(movie_run_manifest, stage="batch_colorize", status="succeeded")
+        _mark_movie_stage(
+            movie_run_manifest,
+            stage="batch_colorize",
+            status="succeeded",
+            runtime_seconds=round(time.perf_counter() - stage_started, 3),
+        )
         write_json_manifest(movie_run_manifest_path, movie_run_manifest)
 
         compression_config = config.compression
@@ -104,22 +118,30 @@ def run_colorize_movie(
 
         _mark_movie_stage(movie_run_manifest, stage="assembly", status="running")
         write_json_manifest(movie_run_manifest_path, movie_run_manifest)
+        stage_started = time.perf_counter()
         run_assemble_final(
             config=config,
             scene_manifest_path=scene_manifest_path,
             output_path=assembly_output_path,
             limit=limit,
         )
-        _mark_movie_stage(movie_run_manifest, stage="assembly", status="succeeded")
+        _mark_movie_stage(
+            movie_run_manifest,
+            stage="assembly",
+            status="succeeded",
+            runtime_seconds=round(time.perf_counter() - stage_started, 3),
+        )
 
         _mark_movie_stage(movie_run_manifest, stage="compression", status="running")
         write_json_manifest(movie_run_manifest_path, movie_run_manifest)
+        stage_started = time.perf_counter()
         compression_result = _compress_final_movie(
             input_path=assembly_output_path,
             output_path=output_path,
             source_movie_path=movie_path,
             compression_config=compression_config,
         )
+        compression_result["runtime_seconds"] = round(time.perf_counter() - stage_started, 3)
         _mark_movie_stage(
             movie_run_manifest,
             stage="compression",

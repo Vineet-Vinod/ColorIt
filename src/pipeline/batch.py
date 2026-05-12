@@ -23,6 +23,7 @@ class BatchSceneStatus:
     output_clip: str
     status: str
     runtime_seconds: float | None = None
+    stage_runtime_seconds: dict[str, float] | None = None
     error: str | None = None
 
 
@@ -97,8 +98,10 @@ def run_colorize_batch(
             continue
 
         started = time.perf_counter()
+        stage_runtimes: dict[str, float] = {}
         try:
             if not scene_clip_path.exists():
+                stage_started = time.perf_counter()
                 extract_clip(
                     input_path=movie_path,
                     output_path=scene_clip_path,
@@ -108,8 +111,12 @@ def run_colorize_batch(
                     crf=int(config.raw["video"]["crf"]),
                     pixel_format=str(config.raw["video"]["pixel_format"]),
                 )
+                stage_runtimes["scene_extraction"] = time.perf_counter() - stage_started
                 print(f"Extracted scene clip: {scene_clip_path.name}")
+            else:
+                stage_runtimes["scene_extraction"] = 0.0
 
+            stage_started = time.perf_counter()
             run_colorize_clip(
                 config=config,
                 config_path=config_path,
@@ -119,6 +126,9 @@ def run_colorize_batch(
                 overwrite=True,
                 model_bundle=shared_bundle,
             )
+            stage_runtimes["deoldify"] = time.perf_counter() - stage_started
+
+            stage_started = time.perf_counter()
             run_ddcolor_clip(
                 input_path=scene_clip_path,
                 output_path=ddcolor_clip_path,
@@ -128,6 +138,9 @@ def run_colorize_batch(
                 output_preset="ultrafast",
                 overwrite=True,
             )
+            stage_runtimes["ddcolor"] = time.perf_counter() - stage_started
+
+            stage_started = time.perf_counter()
             run_model_chroma_propagate(
                 source_path=deoldify_clip_path,
                 model_color_path=ddcolor_clip_path,
@@ -136,12 +149,14 @@ def run_colorize_batch(
                 chroma_blend=1.0,
                 overwrite=True,
             )
+            stage_runtimes["chroma_propagation"] = time.perf_counter() - stage_started
             status = BatchSceneStatus(
                 scene_id=scene_id,
                 input_clip=str(scene_clip_path),
                 output_clip=str(colorized_clip_path),
                 status="succeeded",
                 runtime_seconds=time.perf_counter() - started,
+                stage_runtime_seconds=stage_runtimes,
             )
             if cleanup_scene_clips and scene_clip_path.exists():
                 scene_clip_path.unlink()
@@ -152,6 +167,7 @@ def run_colorize_batch(
                 output_clip=str(colorized_clip_path),
                 status="failed",
                 runtime_seconds=time.perf_counter() - started,
+                stage_runtime_seconds=stage_runtimes,
                 error=str(exc),
             )
             print(f"Scene failed: {scene_id}: {exc}")
@@ -241,3 +257,15 @@ def _refresh_batch_summary(payload: dict[str, Any], *, expected_scene_count: int
     payload["succeeded_scene_count"] = succeeded
     payload["failed_scene_count"] = failed
     payload["remaining_scene_count"] = remaining
+    payload["stage_runtime_seconds"] = _sum_stage_runtimes(runs)
+
+
+def _sum_stage_runtimes(runs: list[dict[str, Any]]) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for entry in runs:
+        stage_runtimes = entry.get("stage_runtime_seconds")
+        if not isinstance(stage_runtimes, dict):
+            continue
+        for stage_name, runtime_seconds in stage_runtimes.items():
+            totals[stage_name] = totals.get(stage_name, 0.0) + float(runtime_seconds)
+    return {stage_name: round(runtime_seconds, 3) for stage_name, runtime_seconds in totals.items()}

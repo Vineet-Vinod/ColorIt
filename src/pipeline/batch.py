@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import shutil
 import time
 from typing import Any
 
 from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import AppConfig
 from src.pipeline.ddcolor_clip import DEFAULT_DDCOLOR_WEIGHTS_PATH, run_ddcolor_clip
-from src.pipeline.ffmpeg_utils import extract_clip, ffprobe_media
+from src.pipeline.ffmpeg_utils import copy_clip, encode_scene_mezzanine, ffprobe_media, segment_copy_clips
 from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
 from src.pipeline.model_chroma_propagate import run_model_chroma_propagate
 from src.pipeline.model_loader import load_colorizer_bundle
@@ -78,6 +79,9 @@ def run_colorize_batch(
     print(f"Batch scene count: {len(scenes)}")
     print(f"Resume mode: {resume}")
     shared_bundle = None
+    scene_mezzanine_path = scene_output_dir / "source_mezzanine.mp4"
+    scene_clips_prepared = False
+    scene_preparation_runtimes: dict[str, float] = {}
 
     for scene in scenes:
         scene_id = scene["scene_id"]
@@ -123,16 +127,25 @@ def run_colorize_batch(
         try:
             if not _is_usable_video(scene_clip_path):
                 stage_started = time.perf_counter()
-                extract_clip(
-                    input_path=movie_path,
-                    output_path=scene_clip_path,
-                    start_time=scene["start_time"],
-                    end_time=scene["end_time"],
-                    video_codec=str(config.raw["video"]["output_codec"]),
-                    crf=int(config.raw["video"]["crf"]),
-                    pixel_format=str(config.raw["video"]["pixel_format"]),
-                )
+                if not scene_clips_prepared:
+                    scene_preparation_runtimes = _prepare_scene_clips(
+                        movie_path=movie_path,
+                        scene_output_dir=scene_output_dir,
+                        mezzanine_path=scene_mezzanine_path,
+                        scenes=scenes,
+                        config=config,
+                    )
+                    scene_clips_prepared = True
+                if not _is_usable_video(scene_clip_path):
+                    copy_clip(
+                        input_path=scene_mezzanine_path,
+                        output_path=scene_clip_path,
+                        start_time=scene["start_time"],
+                        duration_seconds=float(scene["duration_seconds"]),
+                    )
                 stage_runtimes["scene_extraction"] = time.perf_counter() - stage_started
+                stage_runtimes.update(scene_preparation_runtimes)
+                scene_preparation_runtimes = {}
                 print(f"Extracted scene clip: {scene_clip_path.name}")
             else:
                 stage_runtimes["scene_extraction"] = 0.0
@@ -222,6 +235,102 @@ def run_colorize_batch(
     if int(batch_payload["failed_scene_count"]) > 0:
         raise RuntimeError(f"{batch_payload['failed_scene_count']} scene(s) failed during batch colorization.")
     return 0
+
+
+def _prepare_scene_clips(
+    *,
+    movie_path: Path,
+    scene_output_dir: Path,
+    mezzanine_path: Path,
+    scenes: list[dict[str, Any]],
+    config: AppConfig,
+) -> dict[str, float]:
+    runtimes: dict[str, float] = {}
+    if not _is_usable_video(mezzanine_path):
+        started = time.perf_counter()
+        _encode_scene_mezzanine(
+            movie_path=movie_path,
+            output_path=mezzanine_path,
+            scenes=scenes,
+            config=config,
+        )
+        runtimes["scene_mezzanine_encode"] = time.perf_counter() - started
+        print(f"Encoded scene mezzanine: {mezzanine_path.name}")
+
+    if _can_segment_scenes(scenes):
+        started = time.perf_counter()
+        _segment_scene_clips(
+            mezzanine_path=mezzanine_path,
+            scene_output_dir=scene_output_dir,
+            scenes=scenes,
+        )
+        runtimes["scene_stream_copy_split"] = time.perf_counter() - started
+        print(f"Stream-copied scene clips from mezzanine: {len(scenes)}")
+    return runtimes
+
+
+def _can_segment_scenes(scenes: list[dict[str, Any]]) -> bool:
+    previous_end: str | None = None
+    for scene in scenes:
+        start_time = str(scene["start_time"])
+        if previous_end is not None and start_time != previous_end:
+            return False
+        previous_end = str(scene["end_time"])
+    return True
+
+
+def _segment_scene_clips(
+    *,
+    mezzanine_path: Path,
+    scene_output_dir: Path,
+    scenes: list[dict[str, Any]],
+) -> None:
+    segment_dir = scene_output_dir / "_segments"
+    if segment_dir.exists():
+        shutil.rmtree(segment_dir)
+    segment_dir.mkdir(parents=True, exist_ok=True)
+
+    output_pattern = segment_dir / "scene_%06d.mp4"
+    segment_times = [str(scene["end_time"]) for scene in scenes[:-1]]
+    segment_copy_clips(
+        input_path=mezzanine_path,
+        output_pattern=output_pattern,
+        segment_times=segment_times,
+    )
+    for index, scene in enumerate(scenes):
+        source_path = segment_dir / f"scene_{index:06d}.mp4"
+        if not source_path.exists():
+            raise FileNotFoundError(f"Missing stream-copied scene segment: {source_path}")
+        target_path = scene_output_dir / f"{scene['scene_id']}.mp4"
+        if _is_usable_video(target_path):
+            source_path.unlink()
+        else:
+            source_path.replace(target_path)
+    shutil.rmtree(segment_dir, ignore_errors=True)
+
+
+def _encode_scene_mezzanine(
+    *,
+    movie_path: Path,
+    output_path: Path,
+    scenes: list[dict[str, Any]],
+    config: AppConfig,
+) -> None:
+    keyframe_times = sorted(
+        {
+            timecode
+            for scene in scenes
+            for timecode in (str(scene["start_time"]), str(scene["end_time"]))
+        }
+    )
+    encode_scene_mezzanine(
+        input_path=movie_path,
+        output_path=output_path,
+        keyframe_times=keyframe_times,
+        video_codec=str(config.raw["video"]["output_codec"]),
+        crf=int(config.raw["video"]["crf"]),
+        pixel_format=str(config.raw["video"]["pixel_format"]),
+    )
 
 
 def _load_batch_manifest(

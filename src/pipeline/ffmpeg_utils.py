@@ -58,6 +58,89 @@ def extract_clip(
     _run(command)
 
 
+def encode_scene_mezzanine(
+    *,
+    input_path: Path,
+    output_path: Path,
+    keyframe_times: list[str],
+    video_codec: str,
+    crf: int,
+    pixel_format: str,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-c:v",
+        video_codec,
+        "-crf",
+        str(crf),
+        "-pix_fmt",
+        pixel_format,
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+    ]
+    if keyframe_times:
+        command.extend(["-force_key_frames", ",".join(keyframe_times)])
+    command.append(str(output_path))
+    _run(command)
+
+
+def copy_clip(
+    *,
+    input_path: Path,
+    output_path: Path,
+    start_time: str,
+    duration_seconds: float,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        start_time,
+        "-i",
+        str(input_path),
+        "-t",
+        f"{duration_seconds:.3f}",
+        "-c",
+        "copy",
+        "-avoid_negative_ts",
+        "make_zero",
+        str(output_path),
+    ]
+    _run(command)
+
+
+def segment_copy_clips(
+    *,
+    input_path: Path,
+    output_pattern: Path,
+    segment_times: list[str],
+) -> None:
+    output_pattern.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-c",
+        "copy",
+        "-f",
+        "segment",
+        "-reset_timestamps",
+        "1",
+    ]
+    if segment_times:
+        command.extend(["-segment_times", ",".join(segment_times)])
+    command.append(str(output_pattern))
+    _run(command)
+
+
 def ffprobe_media(path: Path) -> dict[str, str | int | float]:
     command = [
         "ffprobe",

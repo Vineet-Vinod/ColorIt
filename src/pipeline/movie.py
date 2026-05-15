@@ -9,7 +9,7 @@ from typing import Any
 from src.pipeline.assemble import run_assemble_final
 from src.pipeline.batch import run_colorize_batch
 from src.pipeline.config import AppConfig
-from src.pipeline.ffmpeg_utils import compress_video
+from src.pipeline.ffmpeg_utils import compress_video, count_video_frames, ffprobe_media, fps_to_decimal_string
 from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 from src.pipeline.scenes import load_scene_manifest, run_detect_scenes, scene_manifest_matches
@@ -122,6 +122,7 @@ def run_colorize_movie(
         run_assemble_final(
             config=config,
             scene_manifest_path=scene_manifest_path,
+            source_movie_path=movie_path,
             output_path=assembly_output_path,
             limit=limit,
         )
@@ -141,7 +142,13 @@ def run_colorize_movie(
             source_movie_path=movie_path,
             compression_config=compression_config,
         )
+        timing_result = _validate_final_timing(
+            output_path=output_path,
+            source_movie_path=movie_path,
+            limit=limit,
+        )
         compression_result["runtime_seconds"] = round(time.perf_counter() - stage_started, 3)
+        compression_result.update(timing_result)
         _mark_movie_stage(
             movie_run_manifest,
             stage="compression",
@@ -318,6 +325,55 @@ def _compress_final_movie(
         "selected_crf": selected_crf,
         "within_size_target": within_target,
         "skipped_reencode": False,
+    }
+
+
+def _validate_final_timing(
+    *,
+    output_path: Path,
+    source_movie_path: Path,
+    limit: int | None,
+) -> dict[str, Any]:
+    output_info = ffprobe_media(output_path)
+    source_info = ffprobe_media(source_movie_path)
+    source_fps = str(source_info["fps"])
+    output_fps = str(output_info["fps"])
+    source_fps_value = float(fps_to_decimal_string(source_fps))
+    output_fps_value = float(fps_to_decimal_string(output_fps))
+    output_frame_count = count_video_frames(output_path)
+
+    if limit is None:
+        source_duration = float(source_info["duration_seconds"])
+        source_frame_count = int(round(source_duration * source_fps_value))
+    else:
+        source_frame_count = output_frame_count
+        source_duration = output_frame_count / source_fps_value
+
+    expected_duration = source_frame_count / source_fps_value
+    duration_delta = abs(float(output_info["duration_seconds"]) - source_duration)
+    frame_count_matches = output_frame_count == source_frame_count
+    fps_matches = abs(output_fps_value - source_fps_value) <= 1e-9
+    duration_matches = duration_delta <= max(0.05, 1.0 / source_fps_value)
+    if not (frame_count_matches and fps_matches and duration_matches):
+        raise RuntimeError(
+            "Final timing validation failed: "
+            f"source_fps={source_fps}, output_fps={output_fps}, "
+            f"source_frames={source_frame_count}, output_frames={output_frame_count}, "
+            f"source_duration={source_duration:.6f}, "
+            f"expected_duration={expected_duration:.6f}, "
+            f"output_duration={float(output_info['duration_seconds']):.6f}"
+        )
+
+    return {
+        "timing_validated": True,
+        "source_fps": source_fps,
+        "output_fps": output_fps,
+        "source_frame_count": source_frame_count,
+        "final_frame_count": output_frame_count,
+        "source_duration_seconds": source_duration,
+        "expected_duration_seconds": expected_duration,
+        "final_duration_seconds": float(output_info["duration_seconds"]),
+        "duration_delta_seconds": duration_delta,
     }
 
 

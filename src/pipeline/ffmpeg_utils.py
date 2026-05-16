@@ -162,8 +162,10 @@ def ffprobe_media(path: Path) -> dict[str, str | int | float]:
     video_stream = next(
         stream for stream in payload["streams"] if stream.get("codec_type") == "video"
     )
+    format_duration = float(payload["format"]["duration"])
     return {
-        "duration_seconds": float(payload["format"]["duration"]),
+        "duration_seconds": format_duration,
+        "video_duration_seconds": _parse_duration(video_stream.get("duration"), format_duration),
         "fps": str(video_stream["avg_frame_rate"]),
         "width": int(video_stream["width"]),
         "height": int(video_stream["height"]),
@@ -463,6 +465,15 @@ def _parse_frame_count(video_stream: dict) -> int:
         return int(frame_count)
     except ValueError:
         return 0
+
+
+def _parse_duration(value: object, fallback: float) -> float:
+    if value is None or value == "N/A":
+        return fallback
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _run(command: list[str]) -> None:

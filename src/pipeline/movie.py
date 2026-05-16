@@ -343,14 +343,19 @@ def _validate_final_timing(
     output_frame_count = count_video_frames(output_path)
 
     if limit is None:
-        source_duration = float(source_info["duration_seconds"])
-        source_frame_count = int(round(source_duration * source_fps_value))
+        source_frame_count = count_video_frames(source_movie_path)
+        if source_frame_count <= 0:
+            source_frame_count = int(source_info.get("frame_count", 0))
+        if source_frame_count <= 0:
+            source_frame_count = int(round(float(source_info["video_duration_seconds"]) * source_fps_value))
+        source_duration = source_frame_count / source_fps_value
     else:
         source_frame_count = output_frame_count
         source_duration = output_frame_count / source_fps_value
 
     expected_duration = source_frame_count / source_fps_value
-    duration_delta = abs(float(output_info["duration_seconds"]) - source_duration)
+    output_video_duration = float(output_info.get("video_duration_seconds", output_info["duration_seconds"]))
+    duration_delta = abs(output_video_duration - source_duration)
     frame_count_matches = output_frame_count == source_frame_count
     fps_matches = abs(output_fps_value - source_fps_value) <= 1e-9
     duration_matches = duration_delta <= max(0.05, 1.0 / source_fps_value)
@@ -361,7 +366,7 @@ def _validate_final_timing(
             f"source_frames={source_frame_count}, output_frames={output_frame_count}, "
             f"source_duration={source_duration:.6f}, "
             f"expected_duration={expected_duration:.6f}, "
-            f"output_duration={float(output_info['duration_seconds']):.6f}"
+            f"output_duration={output_video_duration:.6f}"
         )
 
     return {
@@ -372,7 +377,8 @@ def _validate_final_timing(
         "final_frame_count": output_frame_count,
         "source_duration_seconds": source_duration,
         "expected_duration_seconds": expected_duration,
-        "final_duration_seconds": float(output_info["duration_seconds"]),
+        "final_duration_seconds": output_video_duration,
+        "final_container_duration_seconds": float(output_info["duration_seconds"]),
         "duration_delta_seconds": duration_delta,
     }
 

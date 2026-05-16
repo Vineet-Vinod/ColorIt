@@ -17,6 +17,9 @@ from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 from src.pipeline.scenes import load_scene_manifest
 
 
+SCENE_EXTRACTION_VERSION = "scene-copy-cfr-v2"
+
+
 @dataclass(frozen=True)
 class BatchSceneStatus:
     scene_id: str
@@ -80,6 +83,20 @@ def run_colorize_batch(
     print(f"Resume mode: {resume}")
     shared_bundle = None
     scene_mezzanine_path = scene_output_dir / "source_mezzanine.mp4"
+    scene_extraction_manifest_path = scene_output_dir / "scene_extraction_manifest.json"
+    if not _scene_extraction_manifest_matches(
+        manifest_path=scene_extraction_manifest_path,
+        movie_path=movie_path,
+        scenes=scenes,
+    ):
+        _invalidate_scene_artifacts(
+            scenes=scenes,
+            scene_output_dir=scene_output_dir,
+            colorized_output_dir=colorized_output_dir,
+            deoldify_output_dir=deoldify_output_dir,
+            ddcolor_output_dir=ddcolor_output_dir,
+            scene_extraction_manifest_path=scene_extraction_manifest_path,
+        )
     scene_clips_prepared = False
     scene_preparation_runtimes: dict[str, float] = {}
 
@@ -134,6 +151,8 @@ def run_colorize_batch(
                         mezzanine_path=scene_mezzanine_path,
                         scenes=scenes,
                         config=config,
+                        extraction_manifest_path=scene_extraction_manifest_path,
+                        use_segment_copy=limit is None,
                     )
                     scene_clips_prepared = True
                 if not _is_usable_video(scene_clip_path):
@@ -244,6 +263,8 @@ def _prepare_scene_clips(
     mezzanine_path: Path,
     scenes: list[dict[str, Any]],
     config: AppConfig,
+    extraction_manifest_path: Path,
+    use_segment_copy: bool,
 ) -> dict[str, float]:
     runtimes: dict[str, float] = {}
     if not _is_usable_video(mezzanine_path):
@@ -257,7 +278,7 @@ def _prepare_scene_clips(
         runtimes["scene_mezzanine_encode"] = time.perf_counter() - started
         print(f"Encoded scene mezzanine: {mezzanine_path.name}")
 
-    if _can_segment_scenes(scenes):
+    if use_segment_copy and _can_segment_scenes(scenes):
         started = time.perf_counter()
         _segment_scene_clips(
             mezzanine_path=mezzanine_path,
@@ -266,6 +287,11 @@ def _prepare_scene_clips(
         )
         runtimes["scene_stream_copy_split"] = time.perf_counter() - started
         print(f"Stream-copied scene clips from mezzanine: {len(scenes)}")
+        _write_scene_extraction_manifest(
+            manifest_path=extraction_manifest_path,
+            movie_path=movie_path,
+            scenes=scenes,
+        )
     return runtimes
 
 
@@ -302,11 +328,77 @@ def _segment_scene_clips(
         if not source_path.exists():
             raise FileNotFoundError(f"Missing stream-copied scene segment: {source_path}")
         target_path = scene_output_dir / f"{scene['scene_id']}.mp4"
-        if _is_usable_video(target_path):
-            source_path.unlink()
-        else:
-            source_path.replace(target_path)
+        if target_path.exists():
+            target_path.unlink()
+        source_path.replace(target_path)
     shutil.rmtree(segment_dir, ignore_errors=True)
+
+
+def _scene_extraction_manifest_matches(
+    *,
+    manifest_path: Path,
+    movie_path: Path,
+    scenes: list[dict[str, Any]],
+) -> bool:
+    payload = load_json_manifest(manifest_path, {})
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("version") != SCENE_EXTRACTION_VERSION:
+        return False
+    if payload.get("movie") != str(movie_path):
+        return False
+    if payload.get("scene_count") != len(scenes):
+        return False
+    return payload.get("scene_signature") == _scene_signature(scenes)
+
+
+def _write_scene_extraction_manifest(
+    *,
+    manifest_path: Path,
+    movie_path: Path,
+    scenes: list[dict[str, Any]],
+) -> None:
+    write_json_manifest(
+        manifest_path,
+        {
+            "version": SCENE_EXTRACTION_VERSION,
+            "movie": str(movie_path),
+            "scene_count": len(scenes),
+            "scene_signature": _scene_signature(scenes),
+            "updated_at": utc_now_iso(),
+        },
+    )
+
+
+def _scene_signature(scenes: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {
+            "scene_id": str(scene["scene_id"]),
+            "start_time": str(scene["start_time"]),
+            "end_time": str(scene["end_time"]),
+            "duration_seconds": str(scene["duration_seconds"]),
+        }
+        for scene in scenes
+    ]
+
+
+def _invalidate_scene_artifacts(
+    *,
+    scenes: list[dict[str, Any]],
+    scene_output_dir: Path,
+    colorized_output_dir: Path,
+    deoldify_output_dir: Path,
+    ddcolor_output_dir: Path,
+    scene_extraction_manifest_path: Path,
+) -> None:
+    for scene in scenes:
+        scene_id = str(scene["scene_id"])
+        for directory in (scene_output_dir, colorized_output_dir, deoldify_output_dir, ddcolor_output_dir):
+            candidate = directory / f"{scene_id}.mp4"
+            if candidate.exists():
+                candidate.unlink()
+    if scene_extraction_manifest_path.exists():
+        scene_extraction_manifest_path.unlink()
 
 
 def _encode_scene_mezzanine(

@@ -5,6 +5,7 @@ from pathlib import Path
 from src.pipeline.config import AppConfig
 from src.pipeline.ffmpeg_utils import (
     concat_videos,
+    count_video_frames,
     ffprobe_media,
     fps_to_decimal_string,
     normalize_cfr_video,
@@ -67,7 +68,9 @@ def run_assemble_final(
     fps = str(source_info["fps"])
     fps_value = float(fps_to_decimal_string(fps))
     if limit is None:
-        frame_count = int(round(float(source_info["duration_seconds"]) * fps_value))
+        frame_count = count_video_frames(source_movie_path)
+        if frame_count <= 0:
+            frame_count = int(round(float(source_info["video_duration_seconds"]) * fps_value))
     else:
         frame_count = int(
             round(sum(float(scene["duration_seconds"]) for scene in scenes) * fps_value)

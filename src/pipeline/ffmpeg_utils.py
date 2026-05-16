@@ -362,6 +362,7 @@ def normalize_cfr_video(
     video_codec: str,
     crf: int,
     pixel_format: str,
+    preset: str | None = None,
     audio_bitrate: str = "192k",
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -390,20 +391,26 @@ def normalize_cfr_video(
         "cfr",
         "-c:v",
         video_codec,
-        "-crf",
-        str(crf),
-        "-pix_fmt",
-        pixel_format,
-        "-c:a",
-        "aac",
-        "-b:a",
-        audio_bitrate,
-        "-af",
-        "apad",
-        "-t",
-        f"{duration_seconds:.6f}",
-        str(output_path),
     ]
+    if preset is not None:
+        command.extend(["-preset", preset])
+    command.extend(
+        [
+            "-crf",
+            str(crf),
+            "-pix_fmt",
+            pixel_format,
+            "-c:a",
+            "aac",
+            "-b:a",
+            audio_bitrate,
+            "-af",
+            "apad",
+            "-t",
+            f"{duration_seconds:.6f}",
+            str(output_path),
+        ]
+    )
     _run(command)
 
 

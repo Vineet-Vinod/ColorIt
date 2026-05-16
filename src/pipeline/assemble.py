@@ -83,9 +83,11 @@ def run_assemble_final(
         output_path=output_path,
         fps=fps,
         frame_count=frame_count,
-        video_codec=str(config.raw["video"]["output_codec"]),
-        crf=int(config.raw["video"]["crf"]),
+        video_codec=str(config.compression.get("video_codec", config.raw["video"]["output_codec"])),
+        crf=int(config.compression.get("crf", config.raw["video"]["crf"])),
         pixel_format=str(config.raw["video"]["pixel_format"]),
+        preset=str(config.compression.get("preset", "veryfast")),
+        audio_bitrate=str(config.compression.get("audio_bitrate", "192k")),
     )
     if raw_concat_path.exists():
         raw_concat_path.unlink()

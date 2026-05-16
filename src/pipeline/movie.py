@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha1
+import math
 from pathlib import Path
 import shutil
 import time
@@ -285,15 +286,19 @@ def _compress_final_movie(
 ) -> dict[str, Any]:
     # Assembly already normalizes with the base compression CRF. If it misses the
     # size target, retry at the higher CRFs instead of re-encoding the same CRF.
-    crfs = [int(value) for value in compression_config.get("retry_crfs", [23, 26, 28])]
-    if not crfs:
-        crfs = [int(compression_config.get("crf", 20))]
-    crfs = list(dict.fromkeys(crfs))
-
     source_size_bytes = source_movie_path.stat().st_size
     max_size_multiplier = float(compression_config.get("max_size_multiplier", 2.0))
     max_size_bytes = int(source_size_bytes * max_size_multiplier)
     input_size_bytes = input_path.stat().st_size
+    base_crf = int(compression_config.get("crf", 20))
+    retry_crfs = [int(value) for value in compression_config.get("retry_crfs", [23, 26, 28])]
+    predicted_crf = base_crf + max(0, math.ceil(6.0 * math.log2(input_size_bytes / max_size_bytes)))
+    crfs = [crf for crf in retry_crfs if crf >= predicted_crf]
+    if not crfs and retry_crfs:
+        crfs = [max(retry_crfs)]
+    if not crfs:
+        crfs = [base_crf]
+    crfs = list(dict.fromkeys(crfs))
     if input_size_bytes <= max_size_bytes:
         if output_path.exists():
             output_path.unlink()

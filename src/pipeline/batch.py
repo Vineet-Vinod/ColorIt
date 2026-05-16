@@ -17,7 +17,7 @@ from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 from src.pipeline.scenes import load_scene_manifest
 
 
-SCENE_EXTRACTION_VERSION = "scene-copy-cfr-v2"
+SCENE_EXTRACTION_VERSION = "scene-copy-cfr-v3-per-scene-copy"
 
 
 @dataclass(frozen=True)
@@ -152,7 +152,7 @@ def run_colorize_batch(
                         scenes=scenes,
                         config=config,
                         extraction_manifest_path=scene_extraction_manifest_path,
-                        use_segment_copy=limit is None,
+                        use_segment_copy=False,
                     )
                     scene_clips_prepared = True
                 if not _is_usable_video(scene_clip_path):
@@ -287,6 +287,12 @@ def _prepare_scene_clips(
         )
         runtimes["scene_stream_copy_split"] = time.perf_counter() - started
         print(f"Stream-copied scene clips from mezzanine: {len(scenes)}")
+        _write_scene_extraction_manifest(
+            manifest_path=extraction_manifest_path,
+            movie_path=movie_path,
+            scenes=scenes,
+        )
+    else:
         _write_scene_extraction_manifest(
             manifest_path=extraction_manifest_path,
             movie_path=movie_path,

@@ -414,6 +414,52 @@ def normalize_cfr_video(
     _run(command)
 
 
+def normalize_silent_cfr_video(
+    *,
+    input_path: Path,
+    output_path: Path,
+    fps: str,
+    frame_count: int,
+    video_codec: str,
+    crf: int,
+    pixel_format: str,
+    preset: str | None = None,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fps_decimal = fps_to_decimal_string(fps)
+    video_filter = (
+        f"fps=fps={fps_decimal},"
+        "tpad=stop_mode=clone:stop_duration=1,"
+        f"trim=end_frame={frame_count},"
+        f"setpts=N/({fps_decimal}*TB)"
+    )
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vf",
+        video_filter,
+        "-an",
+        "-fps_mode",
+        "cfr",
+        "-c:v",
+        video_codec,
+    ]
+    if preset is not None:
+        command.extend(["-preset", preset])
+    command.extend(
+        [
+            "-crf",
+            str(crf),
+            "-pix_fmt",
+            pixel_format,
+            str(output_path),
+        ]
+    )
+    _run(command)
+
+
 def compress_video(
     *,
     input_path: Path,

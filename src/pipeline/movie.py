@@ -264,8 +264,11 @@ def _compress_final_movie(
     source_movie_path: Path,
     compression_config: dict[str, Any],
 ) -> dict[str, Any]:
-    crfs = [int(compression_config.get("crf", 20))]
-    crfs.extend(int(value) for value in compression_config.get("retry_crfs", [23, 26, 28]))
+    # Assembly already normalizes with the base compression CRF. If it misses the
+    # size target, retry at the higher CRFs instead of re-encoding the same CRF.
+    crfs = [int(value) for value in compression_config.get("retry_crfs", [23, 26, 28])]
+    if not crfs:
+        crfs = [int(compression_config.get("crf", 20))]
     crfs = list(dict.fromkeys(crfs))
 
     source_size_bytes = source_movie_path.stat().st_size

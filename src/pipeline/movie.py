@@ -118,20 +118,30 @@ def run_colorize_movie(
 
         _mark_movie_stage(movie_run_manifest, stage="assembly", status="running")
         write_json_manifest(movie_run_manifest_path, movie_run_manifest)
-        stage_started = time.perf_counter()
-        run_assemble_final(
-            config=config,
-            scene_manifest_path=scene_manifest_path,
-            source_movie_path=movie_path,
-            output_path=assembly_output_path,
-            limit=limit,
-        )
-        _mark_movie_stage(
-            movie_run_manifest,
-            stage="assembly",
-            status="succeeded",
-            runtime_seconds=round(time.perf_counter() - stage_started, 3),
-        )
+        if resume and _is_reusable_video(assembly_output_path):
+            print(f"Reusing assembled movie: {assembly_output_path}")
+            _mark_movie_stage(
+                movie_run_manifest,
+                stage="assembly",
+                status="succeeded",
+                runtime_seconds=0.0,
+                reused_output_path=str(assembly_output_path),
+            )
+        else:
+            stage_started = time.perf_counter()
+            run_assemble_final(
+                config=config,
+                scene_manifest_path=scene_manifest_path,
+                source_movie_path=movie_path,
+                output_path=assembly_output_path,
+                limit=limit,
+            )
+            _mark_movie_stage(
+                movie_run_manifest,
+                stage="assembly",
+                status="succeeded",
+                runtime_seconds=round(time.perf_counter() - stage_started, 3),
+            )
 
         _mark_movie_stage(movie_run_manifest, stage="compression", status="running")
         write_json_manifest(movie_run_manifest_path, movie_run_manifest)
@@ -186,6 +196,15 @@ def _resolve_output_path(*, movie_path: Path, output_path: Path | None, limit: i
     if limit is not None:
         suffix = f"{suffix}_first{limit}"
     return movie_path.with_stem(f"{movie_path.stem}{suffix}")
+
+
+def _is_reusable_video(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size <= 0:
+        return False
+    try:
+        return float(ffprobe_media(path)["duration_seconds"]) > 0.0
+    except Exception:
+        return False
 
 
 def _build_run_id(*, movie_path: Path, threshold: float) -> str:

@@ -84,11 +84,12 @@ def run_colorize_batch(
     shared_bundle = None
     scene_mezzanine_path = scene_output_dir / "source_mezzanine.mp4"
     scene_extraction_manifest_path = scene_output_dir / "scene_extraction_manifest.json"
-    if not _scene_extraction_manifest_matches(
+    scene_extraction_current = _scene_extraction_manifest_matches(
         manifest_path=scene_extraction_manifest_path,
         movie_path=movie_path,
         scenes=scenes,
-    ):
+    )
+    if not scene_extraction_current:
         _invalidate_scene_artifacts(
             scenes=scenes,
             scene_output_dir=scene_output_dir,
@@ -97,6 +98,9 @@ def run_colorize_batch(
             ddcolor_output_dir=ddcolor_output_dir,
             scene_extraction_manifest_path=scene_extraction_manifest_path,
         )
+        batch_payload["scene_runs"] = []
+        _refresh_batch_summary(batch_payload, expected_scene_count=len(scenes))
+        write_json_manifest(batch_manifest_path, batch_payload)
     scene_clips_prepared = False
     scene_preparation_runtimes: dict[str, float] = {}
 

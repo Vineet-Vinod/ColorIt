@@ -340,12 +340,14 @@ def _validate_final_timing(
     output_fps = str(output_info["fps"])
     source_fps_value = float(fps_to_decimal_string(source_fps))
     output_fps_value = float(fps_to_decimal_string(output_fps))
-    output_frame_count = count_video_frames(output_path)
+    output_frame_count = int(output_info.get("frame_count", 0))
+    if output_frame_count <= 0:
+        output_frame_count = count_video_frames(output_path)
 
     if limit is None:
-        source_frame_count = count_video_frames(source_movie_path)
+        source_frame_count = int(source_info.get("frame_count", 0))
         if source_frame_count <= 0:
-            source_frame_count = int(source_info.get("frame_count", 0))
+            source_frame_count = count_video_frames(source_movie_path)
         if source_frame_count <= 0:
             source_frame_count = int(round(float(source_info["video_duration_seconds"]) * source_fps_value))
         source_duration = source_frame_count / source_fps_value

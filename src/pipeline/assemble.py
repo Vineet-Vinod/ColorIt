@@ -68,7 +68,9 @@ def run_assemble_final(
     fps = str(source_info["fps"])
     fps_value = float(fps_to_decimal_string(fps))
     if limit is None:
-        frame_count = count_video_frames(source_movie_path)
+        frame_count = int(source_info.get("frame_count", 0))
+        if frame_count <= 0:
+            frame_count = count_video_frames(source_movie_path)
         if frame_count <= 0:
             frame_count = int(round(float(source_info["video_duration_seconds"]) * fps_value))
     else:

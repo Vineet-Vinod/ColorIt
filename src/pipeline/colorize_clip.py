@@ -11,7 +11,7 @@ from src.pipeline.inference import colorize_rgb_batch
 from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
 from src.pipeline.model_loader import ModelBundle, load_colorizer_bundle
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
-from src.pipeline.preprocess import preprocess_rgb_batch
+from src.pipeline.preprocess import postprocess_colored_batch, preprocess_rgb_batch
 
 
 @dataclass(frozen=True)
@@ -144,6 +144,11 @@ def _run_pipe_transport(
                 model_bundle=bundle,
                 input_rgbs=preprocessed_batch,
                 render_factor=int(config.model["render_factor"]),
+            )
+            result_batch = postprocess_colored_batch(
+                source_rgbs=batch_frames,
+                colored_rgbs=result_batch,
+                preprocessing_config=config.preprocessing,
             )
             for result_np in result_batch:
                 writer.stdin.write(np.ascontiguousarray(result_np).tobytes())

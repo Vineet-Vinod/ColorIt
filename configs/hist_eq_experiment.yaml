@@ -14,9 +14,10 @@ runtime:
 preprocessing:
   histogram_equalization:
     enabled: true
+    target: output_luma
     clip_limit: 2.0
     tile_grid_size: 8
-    strength: 0.70
+    strength: 0.30
 
 video:
   output_codec: libx264

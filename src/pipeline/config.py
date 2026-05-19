@@ -36,6 +36,10 @@ class AppConfig:
     def compression(self) -> dict[str, Any]:
         return self.raw.get("compression", {})
 
+    @property
+    def preprocessing(self) -> dict[str, Any]:
+        return self.raw.get("preprocessing", {})
+
 
 def load_config(path: Path) -> AppConfig:
     if not path.exists():

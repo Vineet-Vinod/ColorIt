@@ -6,7 +6,7 @@ import shutil
 import time
 from typing import Any
 
-from src.pipeline.colorize_clip import run_colorize_clip
+from src.pipeline.colorize_clip import run_deoldify_clip
 from src.pipeline.config import AppConfig
 from src.pipeline.ddcolor_clip import DEFAULT_DDCOLOR_WEIGHTS_PATH, run_ddcolor_clip
 from src.pipeline.ffmpeg_utils import copy_clip, encode_scene_mezzanine, ffprobe_media, segment_copy_clips
@@ -14,6 +14,7 @@ from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_ma
 from src.pipeline.model_chroma_propagate import run_model_chroma_propagate
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
+from src.pipeline.preprocess import equalize_clip_luma_clahe
 from src.pipeline.scenes import load_scene_manifest
 
 
@@ -58,7 +59,14 @@ def run_colorize_batch(
     colorized_output_dir = paths.colorized_dir / "scenes" / run_id
     deoldify_output_dir = paths.colorized_dir / "deoldify" / run_id
     ddcolor_output_dir = paths.colorized_dir / "ddcolor" / run_id
-    for directory in (scene_output_dir, colorized_output_dir, deoldify_output_dir, ddcolor_output_dir):
+    equalized_output_dir = paths.colorized_dir / "clahe" / run_id
+    for directory in (
+        scene_output_dir,
+        colorized_output_dir,
+        deoldify_output_dir,
+        ddcolor_output_dir,
+        equalized_output_dir,
+    ):
         directory.mkdir(parents=True, exist_ok=True)
     cleanup_scene_clips = bool(config.raw.get("runtime", {}).get("cleanup_scene_clips", True))
 
@@ -96,6 +104,7 @@ def run_colorize_batch(
             colorized_output_dir=colorized_output_dir,
             deoldify_output_dir=deoldify_output_dir,
             ddcolor_output_dir=ddcolor_output_dir,
+            equalized_output_dir=equalized_output_dir,
             scene_extraction_manifest_path=scene_extraction_manifest_path,
         )
         batch_payload["scene_runs"] = []
@@ -107,6 +116,7 @@ def run_colorize_batch(
     for scene in scenes:
         scene_id = scene["scene_id"]
         scene_clip_path = scene_output_dir / f"{scene_id}.mp4"
+        equalized_clip_path = equalized_output_dir / f"{scene_id}.mp4"
         deoldify_clip_path = deoldify_output_dir / f"{scene_id}.mp4"
         ddcolor_clip_path = ddcolor_output_dir / f"{scene_id}.mp4"
         colorized_clip_path = colorized_output_dir / f"{scene_id}.mp4"
@@ -173,7 +183,24 @@ def run_colorize_batch(
             else:
                 stage_runtimes["scene_extraction"] = 0.0
 
-            if resume and _is_usable_video(deoldify_clip_path, reference_path=scene_clip_path):
+            if resume and _is_usable_video(equalized_clip_path, reference_path=scene_clip_path):
+                print(f"Reusing CLAHE source clip: {equalized_clip_path.name}")
+                stage_runtimes["clahe"] = 0.0
+            else:
+                stage_started = time.perf_counter()
+                frame_count = equalize_clip_luma_clahe(
+                    input_path=scene_clip_path,
+                    output_path=equalized_clip_path,
+                    clip_limit=2.0,
+                    tile_grid_size=8,
+                    strength=0.70,
+                    crf=int(config.raw["video"]["crf"]),
+                    include_audio=True,
+                )
+                print(f"CLAHE source clip written: {equalized_clip_path.name} ({frame_count} frames)")
+                stage_runtimes["clahe"] = time.perf_counter() - stage_started
+
+            if resume and _is_usable_video(deoldify_clip_path, reference_path=equalized_clip_path):
                 print(f"Reusing DeOldify clip: {deoldify_clip_path.name}")
                 stage_runtimes["deoldify"] = 0.0
             else:
@@ -181,10 +208,10 @@ def run_colorize_batch(
                     print("Loading colorizer model once for batch reuse...")
                     shared_bundle = load_colorizer_bundle(config)
                 stage_started = time.perf_counter()
-                run_colorize_clip(
+                run_deoldify_clip(
                     config=config,
                     config_path=config_path,
-                    input_path=scene_clip_path,
+                    input_path=equalized_clip_path,
                     output_path=deoldify_clip_path,
                     manifest_path=scene_runs_manifest_path,
                     overwrite=True,
@@ -193,13 +220,13 @@ def run_colorize_batch(
                 )
                 stage_runtimes["deoldify"] = time.perf_counter() - stage_started
 
-            if resume and _is_usable_video(ddcolor_clip_path, reference_path=scene_clip_path):
+            if resume and _is_usable_video(ddcolor_clip_path, reference_path=equalized_clip_path):
                 print(f"Reusing DDColor clip: {ddcolor_clip_path.name}")
                 stage_runtimes["ddcolor"] = 0.0
             else:
                 stage_started = time.perf_counter()
                 run_ddcolor_clip(
-                    input_path=scene_clip_path,
+                    input_path=equalized_clip_path,
                     output_path=ddcolor_clip_path,
                     weights_path=paths.root / DEFAULT_DDCOLOR_WEIGHTS_PATH,
                     input_size=256,
@@ -217,7 +244,7 @@ def run_colorize_batch(
                 output_path=colorized_clip_path,
                 keyframe_stride=35,
                 chroma_blend=1.0,
-                audio_input_path=scene_clip_path,
+                audio_input_path=equalized_clip_path,
                 overwrite=True,
             )
             stage_runtimes["chroma_propagation"] = time.perf_counter() - stage_started
@@ -399,11 +426,18 @@ def _invalidate_scene_artifacts(
     colorized_output_dir: Path,
     deoldify_output_dir: Path,
     ddcolor_output_dir: Path,
+    equalized_output_dir: Path,
     scene_extraction_manifest_path: Path,
 ) -> None:
     for scene in scenes:
         scene_id = str(scene["scene_id"])
-        for directory in (scene_output_dir, colorized_output_dir, deoldify_output_dir, ddcolor_output_dir):
+        for directory in (
+            scene_output_dir,
+            colorized_output_dir,
+            deoldify_output_dir,
+            ddcolor_output_dir,
+            equalized_output_dir,
+        ):
             candidate = directory / f"{scene_id}.mp4"
             if candidate.exists():
                 candidate.unlink()

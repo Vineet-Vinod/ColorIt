@@ -219,6 +219,7 @@ def _cleanup_movie_artifacts(*, paths, run_id: str) -> None:
     candidates = [
         paths.scene_dir / run_id,
         paths.colorized_dir / "scenes" / run_id,
+        paths.colorized_dir / "clahe" / run_id,
         paths.colorized_dir / "deoldify" / run_id,
         paths.colorized_dir / "ddcolor" / run_id,
         paths.final_dir / f"{run_id}_assembly_work.mp4",

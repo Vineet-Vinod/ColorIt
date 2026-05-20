@@ -5,9 +5,9 @@ from collections.abc import Sequence
 from pathlib import Path
 import sys
 
-from src.pipeline.colorize_clip import run_colorize_clip
 from src.pipeline.config import load_config
 from src.pipeline.ddcolor_clip import DEFAULT_DDCOLOR_WEIGHTS_PATH, run_ddcolor_clip
+from src.pipeline.full_clip import run_full_colorize_clip
 from src.pipeline.inference import colorize_image_file
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.movie import run_colorize_movie
@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     frame_parser.set_defaults(handler=handle_colorize_frame)
 
     clip_parser = subparsers.add_parser("colorize-clip", help=argparse.SUPPRESS)
-    clip_parser.add_argument("--config", default="configs/default.yaml")
+    clip_parser.add_argument("--config", default="configs/full_movie.yaml")
     clip_parser.add_argument("--input", required=True)
     clip_parser.add_argument("--output", required=True)
     clip_parser.add_argument("--overwrite", action="store_true")
@@ -114,12 +114,11 @@ def handle_colorize_frame(args: argparse.Namespace) -> int:
 
 def handle_colorize_clip(args: argparse.Namespace) -> int:
     config_path = Path(args.config)
-    return run_colorize_clip(
+    return run_full_colorize_clip(
         config=load_config(config_path),
         config_path=config_path,
         input_path=Path(args.input),
         output_path=Path(args.output),
-        manifest_path=None,
         overwrite=bool(args.overwrite),
     )
 

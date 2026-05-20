@@ -29,7 +29,7 @@ class ClipRunRecord:
     status: str
 
 
-def run_colorize_clip(
+def run_deoldify_clip(
     *,
     config: AppConfig,
     config_path: Path,
@@ -93,6 +93,29 @@ def run_colorize_clip(
     print(f"Clip colorization succeeded in {runtime_seconds:.2f}s")
     print(f"Run manifest updated: {manifest_destination}")
     return 0
+
+
+def run_colorize_clip(
+    *,
+    config: AppConfig,
+    config_path: Path,
+    input_path: Path,
+    output_path: Path,
+    manifest_path: Path | None,
+    overwrite: bool,
+    model_bundle: ModelBundle | None = None,
+    include_audio: bool = True,
+) -> int:
+    return run_deoldify_clip(
+        config=config,
+        config_path=config_path,
+        input_path=input_path,
+        output_path=output_path,
+        manifest_path=manifest_path,
+        overwrite=overwrite,
+        model_bundle=model_bundle,
+        include_audio=include_audio,
+    )
 
 
 def _run_pipe_transport(

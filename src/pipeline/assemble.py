@@ -61,7 +61,11 @@ def run_assemble_final(
             raise FileNotFoundError(f"Missing colorized scene clip: {clip_path}")
         expected_scene_frames = int(round(float(scene["duration_seconds"]) * fps_value))
         normalized_clip_path = assembly_scene_dir / clip_path.name
-        if not _clip_matches_frame_count(normalized_clip_path, expected_scene_frames):
+        if not _clip_matches_frame_count(
+            normalized_clip_path,
+            expected_scene_frames,
+            source_path=clip_path,
+        ):
             normalize_silent_cfr_video(
                 input_path=clip_path,
                 output_path=normalized_clip_path,
@@ -130,8 +134,10 @@ def run_assemble_final(
     return 0
 
 
-def _clip_matches_frame_count(path: Path, frame_count: int) -> bool:
+def _clip_matches_frame_count(path: Path, frame_count: int, *, source_path: Path) -> bool:
     if not path.exists() or path.stat().st_size <= 0:
+        return False
+    if source_path.exists() and path.stat().st_mtime < source_path.stat().st_mtime:
         return False
     try:
         return int(ffprobe_media(path).get("frame_count", 0)) == frame_count

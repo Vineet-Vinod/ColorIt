@@ -3,8 +3,14 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 MAX_OUTPUT_FPS = 30.0
+
+
+class FrameSplitSpec(NamedTuple):
+    output_path: Path
+    frame_count: int
 
 
 def extract_single_frame(*, input_path: Path, output_path: Path, time_seconds: float) -> None:
@@ -139,6 +145,82 @@ def segment_copy_clips(
         command.extend(["-segment_times", ",".join(segment_times)])
     command.append(str(output_pattern))
     _run(command)
+
+
+def split_video_by_frame_counts(
+    *,
+    input_path: Path,
+    split_specs: list[FrameSplitSpec],
+    fps: str,
+    video_codec: str,
+    crf: int,
+    pixel_format: str,
+    preset: str | None = None,
+) -> int:
+    media_info = ffprobe_media(input_path)
+    width = int(media_info["width"])
+    height = int(media_info["height"])
+    frame_bytes = width * height * 3
+    total_written = 0
+    last_frame: bytes | None = None
+    exhausted_input = False
+
+    reader = open_rawvideo_reader(input_path=input_path)
+    if reader.stdout is None or reader.stderr is None:
+        raise RuntimeError("ffmpeg rawvideo reader failed to expose stdout/stderr pipes.")
+
+    try:
+        for split_spec in split_specs:
+            if split_spec.frame_count <= 0:
+                raise ValueError(f"Frame split must have a positive frame count: {split_spec}")
+            writer = open_rawvideo_writer(
+                output_path=split_spec.output_path,
+                width=width,
+                height=height,
+                fps=fps,
+                video_codec=video_codec,
+                crf=crf,
+                pixel_format=pixel_format,
+                preset=preset,
+                audio_input_path=None,
+            )
+            if writer.stdin is None or writer.stderr is None:
+                raise RuntimeError("ffmpeg rawvideo writer failed to expose stdin/stderr pipes.")
+
+            try:
+                for _ in range(split_spec.frame_count):
+                    frame_data = _read_exact_or_none(reader.stdout, frame_bytes)
+                    if frame_data is None:
+                        exhausted_input = True
+                        if last_frame is None:
+                            raise RuntimeError("Input ended before any frame could be read.")
+                        frame_data = last_frame
+                    else:
+                        last_frame = frame_data
+                    writer.stdin.write(frame_data)
+                    total_written += 1
+                writer.stdin.close()
+                writer_returncode = writer.wait()
+            finally:
+                if writer.stdin is not None:
+                    writer.stdin.close()
+            if writer_returncode != 0:
+                raise RuntimeError(f"ffmpeg rawvideo writer failed: {writer.stderr.read().decode().strip()}")
+
+        if reader.stdout is not None:
+            reader.stdout.close()
+        if exhausted_input:
+            reader_returncode = reader.wait()
+        else:
+            reader.terminate()
+            reader_returncode = reader.wait()
+    finally:
+        if reader.stdout is not None:
+            reader.stdout.close()
+
+    if exhausted_input and reader_returncode != 0:
+        raise RuntimeError(f"ffmpeg rawvideo reader failed: {reader.stderr.read().decode().strip()}")
+    return total_written
 
 
 def ffprobe_media(path: Path) -> dict[str, str | int | float]:
@@ -527,6 +609,15 @@ def _parse_duration(value: object, fallback: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def _read_exact_or_none(stream, size: int) -> bytes | None:
+    buffer = stream.read(size)
+    if not buffer:
+        return None
+    if len(buffer) != size:
+        raise RuntimeError(f"Unexpected rawvideo frame size: {len(buffer)}")
+    return buffer
 
 
 def _run(command: list[str]) -> None:

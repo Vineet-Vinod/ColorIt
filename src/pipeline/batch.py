@@ -2,14 +2,19 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-import shutil
 import time
 from typing import Any
 
 from src.pipeline.colorize_clip import run_deoldify_clip
 from src.pipeline.config import AppConfig
 from src.pipeline.ddcolor_clip import DEFAULT_DDCOLOR_WEIGHTS_PATH, run_ddcolor_clip
-from src.pipeline.ffmpeg_utils import copy_clip, encode_scene_mezzanine, ffprobe_media, segment_copy_clips
+from src.pipeline.ffmpeg_utils import (
+    FrameSplitSpec,
+    encode_scene_mezzanine,
+    ffprobe_media,
+    fps_to_decimal_string,
+    split_video_by_frame_counts,
+)
 from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
 from src.pipeline.model_chroma_propagate import run_model_chroma_propagate
 from src.pipeline.model_loader import load_colorizer_bundle
@@ -18,7 +23,7 @@ from src.pipeline.preprocess import equalize_clip_luma_clahe
 from src.pipeline.scenes import load_scene_manifest
 
 
-SCENE_EXTRACTION_VERSION = "scene-copy-cfr-v3-per-scene-copy"
+SCENE_EXTRACTION_VERSION = "scene-frame-split-v1"
 
 
 @dataclass(frozen=True)
@@ -166,16 +171,10 @@ def run_colorize_batch(
                         scenes=scenes,
                         config=config,
                         extraction_manifest_path=scene_extraction_manifest_path,
-                        use_segment_copy=False,
                     )
                     scene_clips_prepared = True
                 if not _is_usable_video(scene_clip_path):
-                    copy_clip(
-                        input_path=scene_mezzanine_path,
-                        output_path=scene_clip_path,
-                        start_time=scene["start_time"],
-                        duration_seconds=float(scene["duration_seconds"]),
-                    )
+                    raise FileNotFoundError(f"Missing frame-exact scene clip after extraction: {scene_clip_path}")
                 stage_runtimes["scene_extraction"] = time.perf_counter() - stage_started
                 stage_runtimes.update(scene_preparation_runtimes)
                 scene_preparation_runtimes = {}
@@ -295,7 +294,6 @@ def _prepare_scene_clips(
     scenes: list[dict[str, Any]],
     config: AppConfig,
     extraction_manifest_path: Path,
-    use_segment_copy: bool,
 ) -> dict[str, float]:
     runtimes: dict[str, float] = {}
     if not _is_usable_video(mezzanine_path):
@@ -309,66 +307,48 @@ def _prepare_scene_clips(
         runtimes["scene_mezzanine_encode"] = time.perf_counter() - started
         print(f"Encoded scene mezzanine: {mezzanine_path.name}")
 
-    if use_segment_copy and _can_segment_scenes(scenes):
-        started = time.perf_counter()
-        _segment_scene_clips(
-            mezzanine_path=mezzanine_path,
-            scene_output_dir=scene_output_dir,
-            scenes=scenes,
-        )
-        runtimes["scene_stream_copy_split"] = time.perf_counter() - started
-        print(f"Stream-copied scene clips from mezzanine: {len(scenes)}")
-        _write_scene_extraction_manifest(
-            manifest_path=extraction_manifest_path,
-            movie_path=movie_path,
-            scenes=scenes,
-        )
-    else:
-        _write_scene_extraction_manifest(
-            manifest_path=extraction_manifest_path,
-            movie_path=movie_path,
-            scenes=scenes,
-        )
+    started = time.perf_counter()
+    _split_scene_clips_by_frame_count(
+        mezzanine_path=mezzanine_path,
+        scene_output_dir=scene_output_dir,
+        scenes=scenes,
+        config=config,
+    )
+    runtimes["scene_frame_split"] = time.perf_counter() - started
+    print(f"Frame-exact scene clips written from mezzanine: {len(scenes)}")
+    _write_scene_extraction_manifest(
+        manifest_path=extraction_manifest_path,
+        movie_path=movie_path,
+        scenes=scenes,
+    )
     return runtimes
 
 
-def _can_segment_scenes(scenes: list[dict[str, Any]]) -> bool:
-    previous_end: str | None = None
-    for scene in scenes:
-        start_time = str(scene["start_time"])
-        if previous_end is not None and start_time != previous_end:
-            return False
-        previous_end = str(scene["end_time"])
-    return True
-
-
-def _segment_scene_clips(
+def _split_scene_clips_by_frame_count(
     *,
     mezzanine_path: Path,
     scene_output_dir: Path,
     scenes: list[dict[str, Any]],
+    config: AppConfig,
 ) -> None:
-    segment_dir = scene_output_dir / "_segments"
-    if segment_dir.exists():
-        shutil.rmtree(segment_dir)
-    segment_dir.mkdir(parents=True, exist_ok=True)
-
-    output_pattern = segment_dir / "scene_%06d.mp4"
-    segment_times = [str(scene["end_time"]) for scene in scenes[:-1]]
-    segment_copy_clips(
+    media_info = ffprobe_media(mezzanine_path)
+    fps = str(media_info["fps"])
+    fps_value = float(fps_to_decimal_string(fps))
+    split_specs = [
+        FrameSplitSpec(
+            output_path=scene_output_dir / f"{scene['scene_id']}.mp4",
+            frame_count=max(1, int(round(float(scene["duration_seconds"]) * fps_value))),
+        )
+        for scene in scenes
+    ]
+    split_video_by_frame_counts(
         input_path=mezzanine_path,
-        output_pattern=output_pattern,
-        segment_times=segment_times,
+        split_specs=split_specs,
+        fps=fps,
+        video_codec=str(config.raw["video"]["output_codec"]),
+        crf=int(config.raw["video"]["crf"]),
+        pixel_format=str(config.raw["video"]["pixel_format"]),
     )
-    for index, scene in enumerate(scenes):
-        source_path = segment_dir / f"scene_{index:06d}.mp4"
-        if not source_path.exists():
-            raise FileNotFoundError(f"Missing stream-copied scene segment: {source_path}")
-        target_path = scene_output_dir / f"{scene['scene_id']}.mp4"
-        if target_path.exists():
-            target_path.unlink()
-        source_path.replace(target_path)
-    shutil.rmtree(segment_dir, ignore_errors=True)
 
 
 def _scene_extraction_manifest_matches(

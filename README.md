@@ -24,7 +24,7 @@ uv run colorit download-weights
 Colorize a movie:
 
 ```bash
-uv run colorit /path/to/movie.mp4 --overwrite
+uv run colorit colorize-movie --input /path/to/movie.mp4 --overwrite
 ```
 
 By default this writes `/path/to/movie_color.mp4`. The output is compressed as
@@ -34,15 +34,15 @@ configured `2x` source-size target.
 Useful production flags:
 
 ```bash
-uv run colorit /path/to/movie.mp4 \
+uv run colorit colorize-movie \
+  --input /path/to/movie.mp4 \
   --output /path/to/movie_color.mp4 \
   --resume \
   --overwrite
 ```
 
-Use `--keep-intermediates` only when you need to inspect a failed or suspicious
-run. Normal successful runs delete generated scene clips, colorized scene clips,
-and run manifests automatically.
+Normal successful runs delete generated scene clips, colorized scene clips, and
+run manifests automatically.
 
 ## Defaults
 

@@ -16,8 +16,6 @@ You will work exclusively in the direction of the user with the following constr
 - When experimenting with ideas, and different possible paths, create a worktree with a new branch from where we are at. The worktree must go in `~/worktrees/ColorIt/<branch_name>`
 - Inspect the results of the experiments. Look at frame shots and the video to verify good coloring and temporal consistency.
 - You are ONLY ALLOWED to create branches and worktrees. DO NOT REMOVE/MERGE them. At the end of an exploration/implementation, provide a summary of branches and worktrees created, what they were used for and if they are still needed.
-- All data is in `~/Movies/Kannada`
 - All intermediate artifacts should be stored in `~/ColorIt/data` of `~/ColorIt/tmp` even if the work was done in a worktree
 - Do NOT make plans. I prefer to see results rather than grand plans about what to do. Keep any plans internal, create new branches and worktrees as needed, implement the plans, inspect the results and report directions to adopt in main. The results should be significant with very few drawbacks.
-- After making changes and before committing, test the changes on test.mp4 unless instructed not to. This will catch regressions and verify the changes.
 - Use tmux when starting coloring runs

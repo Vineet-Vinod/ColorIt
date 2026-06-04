@@ -120,3 +120,15 @@ ColorIt is fully automatic, so it does not ask for reference frames, prompts, ma
 - source films with poor contrast or damaged transfers can still produce weak color
 
 The pipeline is optimized for full-movie usefulness over perfect frame-by-frame artistic control.
+
+## License
+
+ColorIt is released under the [ColorIt Attribution License 1.0](LICENSE).
+
+You can use, modify, distribute, and sell the software, including for commercial work. If you publicly share or distribute movies, clips, or other audiovisual outputs colorized with ColorIt or a derivative pipeline, include reasonable attribution such as:
+
+```text
+Colorized with ColorIt
+```
+
+This license only covers ColorIt. You are responsible for having the necessary rights to any movies or media you process.

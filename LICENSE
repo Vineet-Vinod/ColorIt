@@ -1,0 +1,59 @@
+ColorIt Attribution License 1.0
+
+Copyright (c) 2026 Vineet Vinod
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+1. Software attribution
+
+   The above copyright notice and this license notice must be included in all
+   copies or substantial portions of the Software.
+
+2. Output attribution
+
+   If you publicly display, publish, distribute, stream, sell, or otherwise
+   make available a movie, clip, frame sequence, or other audiovisual work that
+   was colorized using the Software, a modified version of the Software, or a
+   pipeline substantially derived from the Software, you must provide
+   reasonable attribution to ColorIt.
+
+   Reasonable attribution includes, for example, one of the following:
+
+   - "Colorized with ColorIt"
+   - "Colorized using ColorIt: https://github.com/Vineet-Vinod/ColorIt"
+   - a substantially similar credit in the video description, credits,
+     accompanying webpage, documentation, or metadata
+
+   Attribution is not required for purely private or internal use until the
+   colorized output is publicly shared or distributed.
+
+3. Derivative pipelines
+
+   If you distribute a modified version of the Software or a pipeline
+   substantially derived from the Software, you must preserve this license and
+   this output attribution requirement.
+
+4. No rights in input media
+
+   This license only covers the Software. It does not grant any rights to use,
+   copy, modify, colorize, publish, distribute, stream, sell, or otherwise
+   exploit any movie, clip, frame sequence, audio track, image, or other input
+   media processed with the Software. You are responsible for having the
+   necessary rights to any input or output media you use.
+
+5. Third-party components
+
+   Third-party software, models, weights, datasets, and dependencies may be
+   subject to their own licenses. Those licenses continue to apply.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

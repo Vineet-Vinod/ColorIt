@@ -1,25 +1,50 @@
 # ColorIt
 
-Automatic movie-first colorization for black-and-white film.
+ColorIt is a local, automatic full-movie colorization pipeline for black-and-white films.
 
-The production path is intentionally small:
+It is built for the practical workflow: give it a movie file, let it split and colorize the film scene by scene, and get back a compressed color movie with the original audio preserved.
 
-- detect scene boundaries
-- colorize each scene with one reused DeOldify model load
-- colorize the same scene with DDColor
-- propagate DDColor chroma over the DeOldify base with optical flow
-- reassemble the full movie
-- compress the final output with size-aware defaults
-- clean intermediate scene clips and manifests after a successful run
+## What It Does
 
-## Quick Start
+- detects scene boundaries
+- applies contrast-aware preprocessing
+- colorizes each scene with DeOldify
+- colorizes each scene with DDColor
+- propagates DDColor chroma over the DeOldify base for temporal stability
+- reassembles the full movie
+- compresses the final output with size-aware defaults
+- cleans intermediate scene clips and manifests after successful runs
 
-Install dependencies and fetch weights once:
+ColorIt is a pipeline, not a single new model. The value is in making strong open-source colorizers work on full-length movies with sane defaults and no manual per-scene work.
+
+## Requirements
+
+- Python `>=3.11,<3.12`
+- `uv`
+- `ffmpeg` and `ffprobe` on `PATH`
+- PyTorch-supported hardware
+
+Apple Silicon MPS is used when available, with CPU fallback. CUDA is also supported by the underlying dependencies when available.
+
+## Install
 
 ```bash
 uv sync
+```
+
+Fetch the DeOldify weights:
+
+```bash
 uv run colorit download-weights
 ```
+
+The full pipeline also requires DDColor weights at:
+
+```text
+models/ddcolor/pytorch_model.bin
+```
+
+## Usage
 
 Colorize a movie:
 
@@ -27,11 +52,16 @@ Colorize a movie:
 uv run colorit colorize-movie --input /path/to/movie.mp4 --overwrite
 ```
 
-By default this writes `/path/to/movie_color.mp4`. The output is compressed as
-part of the run, with retries at higher CRF values if the result exceeds the
-configured `2x` source-size target.
+Write to a specific output path:
 
-Useful production flags:
+```bash
+uv run colorit colorize-movie \
+  --input /path/to/movie.mp4 \
+  --output /path/to/movie_color.mp4 \
+  --overwrite
+```
+
+Resume a failed or interrupted run:
 
 ```bash
 uv run colorit colorize-movie \
@@ -41,8 +71,33 @@ uv run colorit colorize-movie \
   --overwrite
 ```
 
-Normal successful runs delete generated scene clips, colorized scene clips, and
-run manifests automatically.
+By default, output is written next to the input with `_color` appended to the filename.
+
+## CLI
+
+The public CLI intentionally exposes only two commands:
+
+```text
+colorit download-weights
+colorit colorize-movie
+```
+
+`colorize-movie` accepts:
+
+```text
+--input
+--output
+--resume
+--overwrite
+```
+
+Internal frame, clip, model-debug, and configuration flags are not part of the launch CLI.
+
+## Output Size
+
+The final movie is compressed by default. The pipeline retries with higher CRF values if needed so the colorized output stays within the configured size target.
+
+Current launch defaults target at most `1.5x` the source movie size.
 
 ## Defaults
 
@@ -50,11 +105,22 @@ The main pipeline uses `configs/full_movie.yaml`.
 
 Important defaults:
 
-- `render_factor: 17`
+- DeOldify `render_factor: 17`
 - MPS first, CPU fallback
 - rawvideo ffmpeg piping instead of PNG frame round trips
 - scene threshold `0.60`
 - scene clips encoded with H.264 CRF `16`
 - DDColor correction with full-frame chroma propagation at blend `1.0`
-- final compression enabled with H.264 CRF `20`, retrying `23`, `26`, and `28`
-- final size target `<= 2x` the source movie
+- final compression with H.264 CRF `20`, retrying `23`, `26`, and `28`
+- successful runs clean intermediate scene clips and manifests
+
+## Current Limits
+
+ColorIt is fully automatic, so it does not ask for reference frames, prompts, masks, or manual actor labels. That is the point, but it also means some hard cases remain:
+
+- costume colors may be conservative rather than vivid
+- the same costume can still shift across difficult cuts
+- heavy occlusion, fast motion, dances, and fights remain challenging
+- source films with poor contrast or damaged transfers can still produce weak color
+
+The pipeline is optimized for full-movie usefulness over perfect frame-by-frame artistic control.

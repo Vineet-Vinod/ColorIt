@@ -14,6 +14,10 @@ from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 DEFAULT_SPENSERCAI_URL = (
     "https://huggingface.co/spensercai/DeOldify/resolve/main/ColorizeVideo_gen.pth"
 )
+DEFAULT_DDCOLOR_URL = (
+    "https://huggingface.co/piddnad/ddcolor_modelscope/resolve/main/pytorch_model.bin"
+)
+DEFAULT_DDCOLOR_WEIGHTS_PATH = Path("models/ddcolor/pytorch_model.bin")
 
 
 def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -60,28 +64,52 @@ def run_download_weights(
     paths = resolve_project_paths(config)
     ensure_runtime_directories(paths)
 
-    destination = paths.weights_path
-    url = url_override or DEFAULT_SPENSERCAI_URL
+    deoldify_url = url_override or DEFAULT_SPENSERCAI_URL
     manifest_path = paths.manifest_dir / "weights.json"
+    targets = [
+        {
+            "name": "deoldify",
+            "repo_id": config.model["repo_id"],
+            "url": deoldify_url,
+            "destination": paths.weights_path,
+        },
+        {
+            "name": "ddcolor",
+            "repo_id": "piddnad/ddcolor_modelscope",
+            "url": DEFAULT_DDCOLOR_URL,
+            "destination": (paths.root / DEFAULT_DDCOLOR_WEIGHTS_PATH).resolve(),
+        },
+    ]
 
     print(f"Config: {config_path.resolve()}")
-    print(f"Download source: {url}")
-    print(f"Destination: {destination}")
     print("Model loading: intentionally disabled in this bootstrap phase")
 
-    if destination.exists() and not force:
-        print("Weights already exist. Reusing the existing file.")
-    else:
-        download_file(url, destination)
-        print("Weights downloaded successfully.")
+    weights = []
+    for target in targets:
+        destination = target["destination"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        print(f"{target['name']} source: {target['url']}")
+        print(f"{target['name']} destination: {destination}")
+        if destination.exists() and not force:
+            print(f"{target['name']} weights already exist. Reusing the existing file.")
+        else:
+            download_file(str(target["url"]), destination)
+            print(f"{target['name']} weights downloaded successfully.")
+
+        weights.append(
+            {
+                "name": target["name"],
+                "filename": destination.name,
+                "repo_id": target["repo_id"],
+                "sha256": sha256_file(destination),
+                "size_bytes": destination.stat().st_size,
+                "source_url": target["url"],
+                "weights_path": str(destination),
+            }
+        )
 
     payload = {
-        "filename": destination.name,
-        "repo_id": config.model["repo_id"],
-        "sha256": sha256_file(destination),
-        "size_bytes": destination.stat().st_size,
-        "source_url": url,
-        "weights_path": str(destination),
+        "weights": weights,
     }
     write_weights_manifest(manifest_path, payload)
     print(f"Manifest written to {manifest_path}")

@@ -32,17 +32,13 @@ Apple Silicon MPS is used when available, with CPU fallback. CUDA is also suppor
 uv sync
 ```
 
-Fetch the DeOldify weights:
+Fetch the required model weights:
 
 ```bash
 uv run colorit download-weights
 ```
 
-The full pipeline also requires DDColor weights at:
-
-```text
-models/ddcolor/pytorch_model.bin
-```
+This downloads DeOldify to `models/deoldify/ColorizeVideo_gen.pth` and DDColor to `models/ddcolor/pytorch_model.bin`.
 
 ## Usage
 

@@ -10,10 +10,6 @@ from src.pipeline.movie import run_colorize_movie
 from src.pipeline.weights import run_download_weights
 
 
-COMMANDS = {
-    "download-weights",
-    "colorize-movie",
-}
 DEFAULT_MOVIE_CONFIG = Path("configs/full_movie.yaml")
 
 
@@ -24,7 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="{download-weights,colorize-movie}")
 
-    download_parser = subparsers.add_parser("download-weights", help="Download the DeOldify checkpoint.")
+    download_parser = subparsers.add_parser("download-weights", help="Download required model weights.")
     download_parser.set_defaults(handler=handle_download_weights)
 
     movie_parser = subparsers.add_parser("colorize-movie", help="Run the full movie pipeline.")

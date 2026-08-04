@@ -26,6 +26,8 @@ ColorIt is a pipeline, not a single new model. The value is in making strong ope
 
 Apple Silicon MPS is used when available, with CPU fallback. CUDA is also supported by the underlying dependencies when available.
 
+A GPU or Desktop machine with sizeable compute is needed to color a movie in a reasonable time. For example, the entire pipeline takes about 6 hours to color a 2.5 hour movie on an M3 ultra Mac Studio.
+
 ## Install
 
 ```bash

@@ -110,7 +110,7 @@ Codex accelerated research, implementation, debugging, and documentation; human 
 - A PyTorch-supported computer
 - Enough free disk space for approximately 1.7 GB of model weights plus temporary video files
 
-Apple Silicon MPS is used when available, with CPU fallback. A GPU or high-end desktop completes full movies much faster, but a normal laptop can run the included one-minute demonstration on CPU.
+Apple Silicon MPS is used when available, with CPU fallback. Apple Silicon or a high-end desktop CPU completes movies much faster, but a normal laptop can run the included one-minute demonstration on CPU.
 
 ## Install
 

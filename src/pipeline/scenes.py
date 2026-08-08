@@ -60,6 +60,7 @@ def run_detect_scenes(
         movie_duration_seconds=movie_duration,
         threshold=threshold,
         min_scene_seconds=min_scene_seconds,
+        diagnostic_log_path=paths.root / "tmp" / f"scene_detection_{output_path.stem}.log",
     )
     scene_units = split_scenes(
         boundaries=raw_boundaries,
@@ -94,8 +95,13 @@ def detect_scene_boundaries(
     movie_duration_seconds: float,
     threshold: float,
     min_scene_seconds: float,
+    diagnostic_log_path: Path,
 ) -> list[tuple[float, float]]:
-    change_times = detect_scene_change_times(movie_path=movie_path, threshold=threshold)
+    change_times = detect_scene_change_times(
+        movie_path=movie_path,
+        threshold=threshold,
+        diagnostic_log_path=diagnostic_log_path,
+    )
     boundaries = [0.0]
     for time_seconds in change_times:
         if time_seconds <= 0.0 or time_seconds >= movie_duration_seconds:

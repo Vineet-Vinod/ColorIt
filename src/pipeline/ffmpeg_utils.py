@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import NamedTuple
+
+from src.pipeline.progress import ProgressBar
 
 MAX_OUTPUT_FPS = 30.0
 
@@ -72,6 +75,7 @@ def encode_scene_mezzanine(
     video_codec: str,
     crf: int,
     pixel_format: str,
+    progress_label: str = "Scene extraction: mezzanine",
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     command = [
@@ -93,7 +97,11 @@ def encode_scene_mezzanine(
     if keyframe_times:
         command.extend(["-force_key_frames", ",".join(keyframe_times)])
     command.append(str(output_path))
-    _run(command)
+    _run(
+        command,
+        progress_label=progress_label,
+        total_frames=playable_cfr_frame_count(ffprobe_media(input_path)),
+    )
 
 
 def copy_clip(
@@ -156,6 +164,7 @@ def split_video_by_frame_counts(
     crf: int,
     pixel_format: str,
     preset: str | None = None,
+    progress_label: str = "Scene extraction: frame split",
 ) -> int:
     media_info = ffprobe_media(input_path)
     width = int(media_info["width"])
@@ -169,57 +178,67 @@ def split_video_by_frame_counts(
     if reader.stdout is None or reader.stderr is None:
         raise RuntimeError("ffmpeg rawvideo reader failed to expose stdout/stderr pipes.")
 
-    try:
-        for split_spec in split_specs:
-            if split_spec.frame_count <= 0:
-                raise ValueError(f"Frame split must have a positive frame count: {split_spec}")
-            writer = open_rawvideo_writer(
-                output_path=split_spec.output_path,
-                width=width,
-                height=height,
-                fps=fps,
-                video_codec=video_codec,
-                crf=crf,
-                pixel_format=pixel_format,
-                preset=preset,
-                audio_input_path=None,
-            )
-            if writer.stdin is None or writer.stderr is None:
-                raise RuntimeError("ffmpeg rawvideo writer failed to expose stdin/stderr pipes.")
+    with ProgressBar(
+        progress_label,
+        total=sum(spec.frame_count for spec in split_specs),
+        unit="frame",
+    ) as progress:
+        try:
+            for split_spec in split_specs:
+                if split_spec.frame_count <= 0:
+                    raise ValueError(f"Frame split must have a positive frame count: {split_spec}")
+                writer = open_rawvideo_writer(
+                    output_path=split_spec.output_path,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    video_codec=video_codec,
+                    crf=crf,
+                    pixel_format=pixel_format,
+                    preset=preset,
+                    audio_input_path=None,
+                )
+                if writer.stdin is None or writer.stderr is None:
+                    raise RuntimeError("ffmpeg rawvideo writer failed to expose stdin/stderr pipes.")
 
-            try:
-                for _ in range(split_spec.frame_count):
-                    frame_data = _read_exact_or_none(reader.stdout, frame_bytes)
-                    if frame_data is None:
-                        exhausted_input = True
-                        if last_frame is None:
-                            raise RuntimeError("Input ended before any frame could be read.")
-                        frame_data = last_frame
-                    else:
-                        last_frame = frame_data
-                    writer.stdin.write(frame_data)
-                    total_written += 1
-                writer.stdin.close()
-                writer_returncode = writer.wait()
-            finally:
-                if writer.stdin is not None:
+                try:
+                    for _ in range(split_spec.frame_count):
+                        frame_data = _read_exact_or_none(reader.stdout, frame_bytes)
+                        if frame_data is None:
+                            exhausted_input = True
+                            if last_frame is None:
+                                raise RuntimeError("Input ended before any frame could be read.")
+                            frame_data = last_frame
+                        else:
+                            last_frame = frame_data
+                        writer.stdin.write(frame_data)
+                        total_written += 1
+                        progress.update()
                     writer.stdin.close()
-            if writer_returncode != 0:
-                raise RuntimeError(f"ffmpeg rawvideo writer failed: {writer.stderr.read().decode().strip()}")
+                    writer_returncode = writer.wait()
+                finally:
+                    if writer.stdin is not None:
+                        writer.stdin.close()
+                if writer_returncode != 0:
+                    raise RuntimeError(
+                        f"ffmpeg rawvideo writer failed: {writer.stderr.read().decode().strip()}"
+                    )
 
-        if reader.stdout is not None:
-            reader.stdout.close()
-        if exhausted_input:
-            reader_returncode = reader.wait()
-        else:
-            reader.terminate()
-            reader_returncode = reader.wait()
-    finally:
-        if reader.stdout is not None:
-            reader.stdout.close()
+            if reader.stdout is not None:
+                reader.stdout.close()
+            if exhausted_input:
+                reader_returncode = reader.wait()
+            else:
+                reader.terminate()
+                reader_returncode = reader.wait()
+        finally:
+            if reader.stdout is not None:
+                reader.stdout.close()
 
-    if exhausted_input and reader_returncode != 0:
-        raise RuntimeError(f"ffmpeg rawvideo reader failed: {reader.stderr.read().decode().strip()}")
+        if exhausted_input and reader_returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg rawvideo reader failed: {reader.stderr.read().decode().strip()}"
+            )
     return total_written
 
 
@@ -314,33 +333,66 @@ def get_media_duration_seconds(path: Path) -> float:
     return float(result.stdout.strip())
 
 
-def detect_scene_change_times(*, movie_path: Path, threshold: float) -> list[float]:
-    escaped_path = str(movie_path).replace(",", "\\,")
-    lavfi = f"movie={escaped_path},select=gt(scene\\,{threshold:.4f})"
+def detect_scene_change_times(
+    *,
+    movie_path: Path,
+    threshold: float,
+    diagnostic_log_path: Path,
+) -> list[float]:
+    media_info = ffprobe_media(movie_path)
+    diagnostic_log_path.parent.mkdir(parents=True, exist_ok=True)
+    filter_graph = (
+        "[0:v]split=2[scan][detect];"
+        f"[detect]select='gt(scene,{threshold:.4f})',showinfo,nullsink;"
+        "[scan]null[progress]"
+    )
     command = [
-        "ffprobe",
+        "ffmpeg",
         "-v",
-        "error",
+        "info",
+        "-nostdin",
+        "-i",
+        str(movie_path),
+        "-filter_complex",
+        filter_graph,
+        "-map",
+        "[progress]",
+        "-an",
         "-f",
-        "lavfi",
-        lavfi,
-        "-show_entries",
-        "frame=pts_time",
-        "-of",
-        "csv=p=0",
+        "null",
+        "-",
+        "-progress",
+        "pipe:1",
+        "-nostats",
     ]
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"ffprobe scene detection failed with code {result.returncode}: {result.stderr.strip()}"
+    with diagnostic_log_path.open("w+") as diagnostic_log:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=diagnostic_log,
+            text=True,
+            bufsize=1,
         )
+        if process.stdout is None:
+            raise RuntimeError("ffmpeg scene detection failed to expose its progress pipe.")
+        with ProgressBar(
+            "Scene detection",
+            total=playable_cfr_frame_count(media_info),
+            unit="frame",
+        ) as progress:
+            _consume_ffmpeg_progress(process.stdout, progress=progress, value_key="frame")
+            returncode = process.wait()
+            if returncode != 0:
+                diagnostic_log.seek(0)
+                raise RuntimeError(
+                    f"ffmpeg scene detection failed with code {returncode}: "
+                    f"{diagnostic_log.read().strip()}"
+                )
 
-    change_times: list[float] = []
-    for line in result.stdout.splitlines():
-        value = line.strip().rstrip(",")
-        if not value:
-            continue
-        change_times.append(float(value))
+        diagnostic_log.seek(0)
+        change_times = _parse_showinfo_times(diagnostic_log)
+
+    diagnostic_log_path.unlink(missing_ok=True)
     return change_times
 
 
@@ -464,6 +516,7 @@ def normalize_cfr_video(
     pixel_format: str,
     preset: str | None = None,
     audio_bitrate: str = "192k",
+    progress_label: str = "Assembly: final encode",
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fps_decimal = fps_to_decimal_string(fps)
@@ -511,7 +564,7 @@ def normalize_cfr_video(
             str(output_path),
         ]
     )
-    _run(command)
+    _run(command, progress_label=progress_label, total_frames=frame_count)
 
 
 def normalize_silent_cfr_video(
@@ -524,6 +577,7 @@ def normalize_silent_cfr_video(
     crf: int,
     pixel_format: str,
     preset: str | None = None,
+    progress_label: str = "Assembly: normalize scene",
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fps_decimal = fps_to_decimal_string(fps)
@@ -557,7 +611,7 @@ def normalize_silent_cfr_video(
             str(output_path),
         ]
     )
-    _run(command)
+    _run(command, progress_label=progress_label, total_frames=frame_count)
 
 
 def compress_video(
@@ -570,6 +624,7 @@ def compress_video(
     audio_codec: str,
     audio_bitrate: str,
     faststart: bool,
+    progress_label: str = "Compression",
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     command = [
@@ -593,7 +648,11 @@ def compress_video(
     if faststart:
         command.extend(["-movflags", "+faststart"])
     command.append(str(output_path))
-    _run(command)
+    _run(
+        command,
+        progress_label=progress_label,
+        total_frames=playable_cfr_frame_count(ffprobe_media(input_path)),
+    )
 
 
 def fps_to_decimal_string(value: str) -> str:
@@ -638,9 +697,63 @@ def _read_exact_or_none(stream, size: int) -> bytes | None:
     return buffer
 
 
-def _run(command: list[str]) -> None:
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"ffmpeg command failed with code {result.returncode}: {result.stderr.strip()}"
-        )
+def _run(
+    command: list[str],
+    *,
+    progress_label: str | None = None,
+    total_frames: int | None = None,
+) -> None:
+    if progress_label is None or total_frames is None:
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg command failed with code {result.returncode}: {result.stderr.strip()}"
+            )
+        return
+
+    progress_command = [
+        command[0],
+        "-v",
+        "error",
+        "-nostdin",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        *command[1:],
+    ]
+    process = subprocess.Popen(
+        progress_command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    if process.stdout is None or process.stderr is None:
+        raise RuntimeError("ffmpeg failed to expose progress and error pipes.")
+    with ProgressBar(progress_label, total=total_frames, unit="frame") as progress:
+        _consume_ffmpeg_progress(process.stdout, progress=progress, value_key="frame")
+        returncode = process.wait()
+        if returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg command failed with code {returncode}: {process.stderr.read().strip()}"
+            )
+
+
+def _consume_ffmpeg_progress(stream, *, progress: ProgressBar, value_key: str) -> None:
+    for raw_line in stream:
+        key, separator, value = raw_line.strip().partition("=")
+        if separator and key == value_key:
+            try:
+                progress.update_to(int(value))
+            except ValueError:
+                continue
+
+
+def _parse_showinfo_times(lines) -> list[float]:
+    pattern = re.compile(r"\bpts_time:([^\s]+)")
+    change_times: list[float] = []
+    for line in lines:
+        match = pattern.search(line)
+        if match is not None:
+            change_times.append(float(match.group(1)))
+    return change_times

@@ -75,6 +75,7 @@ def run_assemble_final(
                 crf=int(config.compression.get("crf", config.raw["video"]["crf"])),
                 pixel_format=str(config.raw["video"]["pixel_format"]),
                 preset=str(config.compression.get("preset", "veryfast")),
+                progress_label=f"Assembly: normalize {scene['scene_id']}",
             )
         lines.append(f"file '{normalized_clip_path.as_posix()}'")
         assembly_items.append(

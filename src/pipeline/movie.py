@@ -334,6 +334,7 @@ def _compress_final_movie(
             audio_codec=str(compression_config.get("audio_codec", "aac")),
             audio_bitrate=str(compression_config.get("audio_bitrate", "160k")),
             faststart=bool(compression_config.get("faststart", True)),
+            progress_label=f"Compression (CRF {crf})",
         )
         final_size_bytes = output_path.stat().st_size
         if final_size_bytes <= max_size_bytes:

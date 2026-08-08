@@ -35,4 +35,4 @@ Transitive packages installed from `uv.lock` retain their respective licenses. C
 
 Third-party software and model licenses do not grant rights to movies processed by ColorIt. Users are responsible for ensuring that they may copy, modify, colorize, demonstrate, or distribute their input and output media.
 
-The included hackathon demonstration is a one-minute excerpt from *Ramanjaneya Yuddha*, provided by SRS Movies, covering approximately `00:58:13–00:59:13`. It is identified for attribution and evaluation; any use beyond the submitted demonstration remains subject to the rights holder's terms.
+The included hackathon demonstration is a one-minute excerpt from the SRS Movies presentation of *Ramanjaneya Yuddha*, covering approximately `00:58:13–00:59:13`. ColorIt does not claim ownership of the source film. The excerpt is identified for attribution and evaluation; use and redistribution remain subject to the rights holder's terms.

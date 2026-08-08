@@ -13,6 +13,7 @@ It is built for the practical workflow: give it a movie file, let it split and c
 - propagates DDColor chroma over the DeOldify base for temporal stability
 - reassembles the full movie
 - compresses the final output with size-aware defaults
+- reports live progress and ETA for every long-running stage
 - cleans intermediate scene clips and manifests after successful runs
 
 ColorIt is a pipeline, not a single new model. The value is in making strong open-source colorizers work on full-length movies with sane defaults and no manual per-scene work.
@@ -70,6 +71,10 @@ uv run colorit colorize-movie \
 ```
 
 By default, output is written next to the input with `_color` appended to the filename.
+
+Progress is reported automatically. Frame-processing and FFmpeg stages count actual
+frames, while the batch ETA is weighted by scene duration. On resumed runs, reusable
+scenes begin as completed work and do not distort the remaining-time estimate.
 
 ## CLI
 

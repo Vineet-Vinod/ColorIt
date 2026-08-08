@@ -11,6 +11,7 @@ dependencies = [
   "PyYAML>=6.0,<7.0",
   "torch>=2.6,<3",
   "torchvision>=0.21,<1",
+  "tqdm>=4.67,<5",
 ]
 
 [project.scripts]

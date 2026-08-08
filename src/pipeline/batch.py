@@ -20,6 +20,7 @@ from src.pipeline.model_chroma_propagate import run_model_chroma_propagate
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 from src.pipeline.preprocess import equalize_clip_luma_clahe
+from src.pipeline.progress import ProgressBar
 from src.pipeline.scenes import load_scene_manifest
 
 
@@ -117,6 +118,28 @@ def run_colorize_batch(
         write_json_manifest(batch_manifest_path, batch_payload)
     scene_clips_prepared = False
     scene_preparation_runtimes: dict[str, float] = {}
+    resumable_scene_ids = {
+        str(scene["scene_id"])
+        for scene in scenes
+        if _can_resume_completed_scene(
+            scene=scene,
+            batch_payload=batch_payload,
+            scene_output_dir=scene_output_dir,
+            colorized_output_dir=colorized_output_dir,
+            resume=resume,
+        )
+    }
+    resumed_duration = sum(
+        float(scene["duration_seconds"])
+        for scene in scenes
+        if str(scene["scene_id"]) in resumable_scene_ids
+    )
+    batch_progress = ProgressBar(
+        "Batch colorization",
+        total=sum(float(scene["duration_seconds"]) for scene in scenes),
+        unit="video-s",
+        initial=resumed_duration,
+    )
 
     for scene in scenes:
         scene_id = scene["scene_id"]
@@ -127,15 +150,7 @@ def run_colorize_batch(
         colorized_clip_path = colorized_output_dir / f"{scene_id}.mp4"
         existing_status = _get_scene_status(batch_payload, scene_id)
 
-        if (
-            resume
-            and _is_usable_video(colorized_clip_path, reference_path=scene_clip_path)
-            and (
-                existing_status is None
-                or existing_status.get("status") == "succeeded"
-                or existing_status.get("output_clip") == str(colorized_clip_path)
-            )
-        ):
+        if scene_id in resumable_scene_ids:
             print(f"Skipping completed scene: {scene_id}")
             if existing_status is None or existing_status.get("status") != "succeeded":
                 _upsert_scene_status(
@@ -276,7 +291,9 @@ def run_colorize_batch(
         _upsert_scene_status(batch_payload, status)
         _refresh_batch_summary(batch_payload, expected_scene_count=len(scenes))
         write_json_manifest(batch_manifest_path, batch_payload)
+        batch_progress.update(float(scene["duration_seconds"]))
 
+    batch_progress.finish()
     _refresh_batch_summary(batch_payload, expected_scene_count=len(scenes))
     batch_payload["status"] = "failed" if int(batch_payload["failed_scene_count"]) > 0 else "succeeded"
     batch_payload["updated_at"] = utc_now_iso()
@@ -288,6 +305,29 @@ def run_colorize_batch(
     if int(batch_payload["failed_scene_count"]) > 0:
         raise RuntimeError(f"{batch_payload['failed_scene_count']} scene(s) failed during batch colorization.")
     return 0
+
+
+def _can_resume_completed_scene(
+    *,
+    scene: dict[str, Any],
+    batch_payload: dict[str, Any],
+    scene_output_dir: Path,
+    colorized_output_dir: Path,
+    resume: bool,
+) -> bool:
+    if not resume:
+        return False
+    scene_id = str(scene["scene_id"])
+    scene_clip_path = scene_output_dir / f"{scene_id}.mp4"
+    colorized_clip_path = colorized_output_dir / f"{scene_id}.mp4"
+    if not _is_usable_video(colorized_clip_path, reference_path=scene_clip_path):
+        return False
+    existing_status = _get_scene_status(batch_payload, scene_id)
+    return (
+        existing_status is None
+        or existing_status.get("status") == "succeeded"
+        or existing_status.get("output_clip") == str(colorized_clip_path)
+    )
 
 
 def _prepare_scene_clips(

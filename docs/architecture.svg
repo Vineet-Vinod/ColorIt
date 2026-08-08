@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">ColorIt movie colorization architecture</title>
+  <desc id="desc">A scene-aware pipeline that prepares a movie, runs DeOldify and DDColor in parallel, temporally fuses chroma, reassembles the source audio, compresses, and validates the output.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101828"/>
+      <stop offset="1" stop-color="#1d2939"/>
+    </linearGradient>
+    <linearGradient id="input" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#475467"/>
+      <stop offset="1" stop-color="#344054"/>
+    </linearGradient>
+    <linearGradient id="ai" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7f56d9"/>
+      <stop offset="1" stop-color="#53389e"/>
+    </linearGradient>
+    <linearGradient id="fusion" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0ba5ec"/>
+      <stop offset="1" stop-color="#026aa2"/>
+    </linearGradient>
+    <linearGradient id="output" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#12b76a"/>
+      <stop offset="1" stop-color="#027a48"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000" flood-opacity=".25"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#98a2b3"/>
+    </marker>
+    <style>
+      .title { font: 700 46px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #fff; }
+      .subtitle { font: 400 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #d0d5dd; }
+      .stage { font: 700 23px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #fff; }
+      .body { font: 400 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #eaecf0; }
+      .small { font: 500 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #d0d5dd; }
+      .label { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #b9e6fe; letter-spacing: 1.4px; }
+      .arrow { stroke: #98a2b3; stroke-width: 4; fill: none; marker-end: url(#arrow); }
+      .dash { stroke-dasharray: 10 10; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" rx="28" fill="url(#background)"/>
+  <text x="80" y="78" class="title">ColorIt: an automatic movie colorization pipeline</text>
+  <text x="80" y="116" class="subtitle">Scene-aware dual-model inference • temporal chroma fusion • timing-safe delivery</text>
+
+  <text x="80" y="175" class="label">1 · PREPARE</text>
+  <rect x="80" y="195" width="270" height="155" rx="22" fill="url(#input)" filter="url(#shadow)"/>
+  <text x="110" y="241" class="stage">Input movie</text>
+  <text x="110" y="276" class="body">Black-and-white video</text>
+  <text x="110" y="304" class="body">Original timing + audio</text>
+  <text x="110" y="332" class="small">FFmpeg / ffprobe</text>
+
+  <path d="M350 273 H410" class="arrow"/>
+  <rect x="420" y="195" width="310" height="155" rx="22" fill="url(#input)" filter="url(#shadow)"/>
+  <text x="450" y="241" class="stage">Scene detection</text>
+  <text x="450" y="276" class="body">Cut-aware segmentation</text>
+  <text x="450" y="304" class="body">Frame-exact CFR clips</text>
+  <text x="450" y="332" class="small">Bounded scene duration</text>
+
+  <path d="M730 273 H790" class="arrow"/>
+  <rect x="800" y="195" width="300" height="155" rx="22" fill="url(#input)" filter="url(#shadow)"/>
+  <text x="830" y="241" class="stage">Luma restoration</text>
+  <text x="830" y="276" class="body">CLAHE on brightness only</text>
+  <text x="830" y="304" class="body">70% conservative blend</text>
+  <text x="830" y="332" class="small">No generated detail</text>
+
+  <text x="80" y="425" class="label">2 · INFER + FUSE EACH SCENE</text>
+  <path d="M950 350 V395 H425 V445" class="arrow"/>
+  <path d="M950 350 V395 H815 V445" class="arrow"/>
+
+  <rect x="230" y="455" width="390" height="155" rx="22" fill="url(#ai)" filter="url(#shadow)"/>
+  <text x="260" y="501" class="stage">DeOldify Video</text>
+  <text x="260" y="536" class="body">Video-oriented color base</text>
+  <text x="260" y="564" class="body">Stable structure + luminance</text>
+  <text x="260" y="592" class="small">PyTorch • model reused by batch</text>
+
+  <rect x="650" y="455" width="390" height="155" rx="22" fill="url(#ai)" filter="url(#shadow)"/>
+  <text x="680" y="501" class="stage">DDColor</text>
+  <text x="680" y="536" class="body">ConvNeXt + dual decoder</text>
+  <text x="680" y="564" class="body">Richer semantic chroma</text>
+  <text x="680" y="592" class="small">Batched local inference</text>
+
+  <path d="M620 533 V635 H1080 V515 H1100" class="arrow"/>
+  <path d="M1040 557 H1100" class="arrow"/>
+  <rect x="1110" y="455" width="410" height="155" rx="22" fill="url(#fusion)" filter="url(#shadow)"/>
+  <text x="1140" y="501" class="stage">Temporal Lab-chroma fusion</text>
+  <text x="1140" y="536" class="body">Smooth DDColor a/b over time</text>
+  <text x="1140" y="564" class="body">Apply to DeOldify base</text>
+  <text x="1140" y="592" class="small">Exponential update • α = 0.25</text>
+
+  <text x="80" y="687" class="label">3 · DELIVER</text>
+  <path d="M1315 610 V660 H270 V710" class="arrow"/>
+  <rect x="80" y="720" width="380" height="120" rx="22" fill="url(#output)" filter="url(#shadow)"/>
+  <text x="110" y="764" class="stage">Reassemble + audio</text>
+  <text x="110" y="797" class="body">Normalize frames, concatenate scenes</text>
+  <text x="110" y="824" class="small">Original audio restored</text>
+
+  <path d="M460 780 H530" class="arrow"/>
+  <rect x="540" y="720" width="380" height="120" rx="22" fill="url(#output)" filter="url(#shadow)"/>
+  <text x="570" y="764" class="stage">Size-aware compression</text>
+  <text x="570" y="797" class="body">H.264 CRF retries • fast start</text>
+  <text x="570" y="824" class="small">Default target ≤ 1.5× source</text>
+
+  <path d="M920 780 H990" class="arrow"/>
+  <rect x="1000" y="720" width="520" height="120" rx="22" fill="url(#output)" filter="url(#shadow)"/>
+  <text x="1030" y="764" class="stage">Validate + publish color movie</text>
+  <text x="1030" y="797" class="body">Frame count • fps • duration • original presentation</text>
+  <text x="1030" y="824" class="small">Clean intermediates after success</text>
+
+  <rect x="1170" y="175" width="350" height="210" rx="20" fill="#0c111d" stroke="#475467" stroke-width="2"/>
+  <text x="1200" y="218" class="stage">Reliability layer</text>
+  <text x="1200" y="255" class="body">• Resumable JSON manifests</text>
+  <text x="1200" y="287" class="body">• Live progress + ETA</text>
+  <text x="1200" y="319" class="body">• MPS acceleration / CPU fallback</text>
+  <text x="1200" y="351" class="body">• Streaming raw-video pipes</text>
+  <path d="M1170 300 H1115" class="arrow dash"/>
+</svg>

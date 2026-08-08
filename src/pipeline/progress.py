@@ -25,6 +25,7 @@ class ProgressBar:
             mininterval=0.25,
             smoothing=0.15,
             leave=True,
+            position=0,
         )
 
     @property

@@ -10,7 +10,13 @@ from typing import Any
 from src.pipeline.assemble import run_assemble_final
 from src.pipeline.batch import run_colorize_batch
 from src.pipeline.config import AppConfig
-from src.pipeline.ffmpeg_utils import compress_video, count_video_frames, ffprobe_media, fps_to_decimal_string
+from src.pipeline.ffmpeg_utils import (
+    compress_video,
+    count_video_frames,
+    ffprobe_media,
+    fps_to_decimal_string,
+    playable_cfr_frame_count,
+)
 from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 from src.pipeline.scenes import load_scene_manifest, run_detect_scenes, scene_manifest_matches
@@ -373,11 +379,7 @@ def _validate_final_timing(
         output_frame_count = count_video_frames(output_path)
 
     if limit is None:
-        source_frame_count = int(source_info.get("frame_count", 0))
-        if source_frame_count <= 0:
-            source_frame_count = count_video_frames(source_movie_path)
-        if source_frame_count <= 0:
-            source_frame_count = int(round(float(source_info["video_duration_seconds"]) * source_fps_value))
+        source_frame_count = playable_cfr_frame_count(source_info)
         source_duration = source_frame_count / source_fps_value
     else:
         source_frame_count = output_frame_count

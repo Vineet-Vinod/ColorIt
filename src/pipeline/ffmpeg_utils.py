@@ -277,6 +277,24 @@ def count_video_frames(path: Path) -> int:
     return int(result.stdout.strip())
 
 
+def playable_cfr_frame_count(media_info: dict[str, str | int | float]) -> int:
+    """Resolve a CFR frame count without scanning frames.
+
+    MP4 clips can retain discarded GOP preroll packets before their playable
+    timeline. ffprobe includes those packets in ``nb_frames``, so prefer the
+    metadata count only when it agrees with the playable video duration.
+    """
+    fps_value = float(fps_to_decimal_string(str(media_info["fps"])))
+    duration_seconds = float(
+        media_info.get("video_duration_seconds", media_info["duration_seconds"])
+    )
+    timeline_frame_count = max(1, int(round(duration_seconds * fps_value)))
+    metadata_frame_count = int(media_info.get("frame_count", 0))
+    if metadata_frame_count > 0 and abs(metadata_frame_count - timeline_frame_count) <= 1:
+        return metadata_frame_count
+    return timeline_frame_count
+
+
 def get_media_duration_seconds(path: Path) -> float:
     command = [
         "ffprobe",

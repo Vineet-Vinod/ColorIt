@@ -5,11 +5,11 @@ from pathlib import Path
 from src.pipeline.config import AppConfig
 from src.pipeline.ffmpeg_utils import (
     concat_videos,
-    count_video_frames,
     ffprobe_media,
     fps_to_decimal_string,
     normalize_cfr_video,
     normalize_silent_cfr_video,
+    playable_cfr_frame_count,
 )
 from src.pipeline.manifest import write_json_manifest
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
@@ -91,11 +91,13 @@ def run_assemble_final(
     concat_videos(input_list_path=concat_list_path, output_path=raw_concat_path)
 
     if limit is None:
-        frame_count = int(source_info.get("frame_count", 0))
-        if frame_count <= 0:
-            frame_count = count_video_frames(source_movie_path)
-        if frame_count <= 0:
-            frame_count = int(round(float(source_info["video_duration_seconds"]) * fps_value))
+        frame_count = playable_cfr_frame_count(source_info)
+        metadata_frame_count = int(source_info.get("frame_count", 0))
+        if metadata_frame_count > frame_count + 1:
+            print(
+                "Ignoring source frames outside the playable timeline during assembly: "
+                f"metadata_frames={metadata_frame_count}, playable_frames={frame_count}"
+            )
     else:
         frame_count = int(
             round(sum(float(scene["duration_seconds"]) for scene in scenes) * fps_value)

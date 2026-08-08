@@ -6,12 +6,18 @@ import time
 import numpy as np
 
 from src.pipeline.config import AppConfig
-from src.pipeline.ffmpeg_utils import ffprobe_media, open_rawvideo_reader, open_rawvideo_writer
+from src.pipeline.ffmpeg_utils import (
+    ffprobe_media,
+    open_rawvideo_reader,
+    open_rawvideo_writer,
+    playable_cfr_frame_count,
+)
 from src.pipeline.inference import colorize_rgb_batch
 from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
 from src.pipeline.model_loader import ModelBundle, load_colorizer_bundle
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 from src.pipeline.preprocess import postprocess_colored_batch, preprocess_rgb_batch
+from src.pipeline.progress import ProgressBar
 
 
 @dataclass(frozen=True)
@@ -39,6 +45,7 @@ def run_deoldify_clip(
     overwrite: bool,
     model_bundle: ModelBundle | None = None,
     include_audio: bool = True,
+    progress_label: str = "DeOldify",
 ) -> int:
     paths = resolve_project_paths(config)
     ensure_runtime_directories(paths)
@@ -67,6 +74,7 @@ def run_deoldify_clip(
         config=config,
         bundle=bundle,
         include_audio=include_audio,
+        progress_label=progress_label,
     )
     runtime_seconds = time.perf_counter() - started
 
@@ -105,6 +113,7 @@ def run_colorize_clip(
     overwrite: bool,
     model_bundle: ModelBundle | None = None,
     include_audio: bool = True,
+    progress_label: str = "DeOldify",
 ) -> int:
     return run_deoldify_clip(
         config=config,
@@ -115,6 +124,7 @@ def run_colorize_clip(
         overwrite=overwrite,
         model_bundle=model_bundle,
         include_audio=include_audio,
+        progress_label=progress_label,
     )
 
 
@@ -126,6 +136,7 @@ def _run_pipe_transport(
     config: AppConfig,
     bundle: ModelBundle,
     include_audio: bool,
+    progress_label: str,
 ) -> int:
     width = int(media_info["width"])
     height = int(media_info["height"])
@@ -149,47 +160,53 @@ def _run_pipe_transport(
         raise RuntimeError("ffmpeg rawvideo writer failed to expose stdin/stderr pipes.")
 
     inference_batch_size = max(1, int(config.runtime.get("inference_batch_size", 1)))
-    try:
-        while True:
-            batch_frames: list[np.ndarray] = []
-            for _ in range(inference_batch_size):
-                frame_data = _read_exact(reader.stdout, frame_bytes)
-                if frame_data is None:
+    with ProgressBar(
+        progress_label,
+        total=playable_cfr_frame_count(media_info),
+        unit="frame",
+    ) as progress:
+        try:
+            while True:
+                batch_frames: list[np.ndarray] = []
+                for _ in range(inference_batch_size):
+                    frame_data = _read_exact(reader.stdout, frame_bytes)
+                    if frame_data is None:
+                        break
+                    batch_frames.append(
+                        np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
+                    )
+                if not batch_frames:
                     break
-                batch_frames.append(
-                    np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
+
+                preprocessed_batch = preprocess_rgb_batch(batch_frames, config.preprocessing)
+                result_batch = colorize_rgb_batch(
+                    model_bundle=bundle,
+                    input_rgbs=preprocessed_batch,
+                    render_factor=int(config.model["render_factor"]),
                 )
-            if not batch_frames:
-                break
+                result_batch = postprocess_colored_batch(
+                    source_rgbs=batch_frames,
+                    colored_rgbs=result_batch,
+                    preprocessing_config=config.preprocessing,
+                )
+                for result_np in result_batch:
+                    writer.stdin.write(np.ascontiguousarray(result_np).tobytes())
+                    frame_count += 1
+                    progress.update()
 
-            preprocessed_batch = preprocess_rgb_batch(batch_frames, config.preprocessing)
-            result_batch = colorize_rgb_batch(
-                model_bundle=bundle,
-                input_rgbs=preprocessed_batch,
-                render_factor=int(config.model["render_factor"]),
-            )
-            result_batch = postprocess_colored_batch(
-                source_rgbs=batch_frames,
-                colored_rgbs=result_batch,
-                preprocessing_config=config.preprocessing,
-            )
-            for result_np in result_batch:
-                writer.stdin.write(np.ascontiguousarray(result_np).tobytes())
-                frame_count += 1
-
-        writer.stdin.close()
-        writer_returncode = writer.wait()
-        reader_returncode = reader.wait()
-    finally:
-        if reader.stdout is not None:
-            reader.stdout.close()
-        if writer.stdin is not None:
             writer.stdin.close()
+            writer_returncode = writer.wait()
+            reader_returncode = reader.wait()
+        finally:
+            if reader.stdout is not None:
+                reader.stdout.close()
+            if writer.stdin is not None:
+                writer.stdin.close()
 
-    if reader_returncode != 0:
-        raise RuntimeError(f"ffmpeg rawvideo reader failed: {reader.stderr.read().decode().strip()}")
-    if writer_returncode != 0:
-        raise RuntimeError(f"ffmpeg rawvideo writer failed: {writer.stderr.read().decode().strip()}")
+        if reader_returncode != 0:
+            raise RuntimeError(f"ffmpeg rawvideo reader failed: {reader.stderr.read().decode().strip()}")
+        if writer_returncode != 0:
+            raise RuntimeError(f"ffmpeg rawvideo writer failed: {writer.stderr.read().decode().strip()}")
     return frame_count
 
 

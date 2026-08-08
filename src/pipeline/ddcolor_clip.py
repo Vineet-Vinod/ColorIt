@@ -8,7 +8,13 @@ import cv2
 import numpy as np
 import torch
 
-from src.pipeline.ffmpeg_utils import ffprobe_media, open_rawvideo_reader, open_rawvideo_writer
+from src.pipeline.ffmpeg_utils import (
+    ffprobe_media,
+    open_rawvideo_reader,
+    open_rawvideo_writer,
+    playable_cfr_frame_count,
+)
+from src.pipeline.progress import ProgressBar
 from src.vendor.ddcolor import DDColor, ColorizationPipeline, build_ddcolor_model
 
 
@@ -28,6 +34,7 @@ def run_ddcolor_clip(
     output_preset: str,
     overwrite: bool,
     include_audio: bool = True,
+    progress_label: str = "DDColor",
 ) -> int:
     input_path = input_path.expanduser().resolve()
     output_path = output_path.expanduser().resolve()
@@ -76,39 +83,45 @@ def run_ddcolor_clip(
 
     frame_index = 0
     start = time.time()
-    try:
-        while True:
-            batch_bgrs: list[np.ndarray] = []
-            for _ in range(DDCOLOR_BATCH_SIZE):
-                frame_data = reader.stdout.read(frame_bytes)
-                if not frame_data:
+    with ProgressBar(
+        progress_label,
+        total=playable_cfr_frame_count(media_info),
+        unit="frame",
+    ) as progress:
+        try:
+            while True:
+                batch_bgrs: list[np.ndarray] = []
+                for _ in range(DDCOLOR_BATCH_SIZE):
+                    frame_data = reader.stdout.read(frame_bytes)
+                    if not frame_data:
+                        break
+                    if len(frame_data) != frame_bytes:
+                        raise RuntimeError(
+                            f"Unexpected end of rawvideo stream; expected {frame_bytes} bytes, got {len(frame_data)}."
+                        )
+                    frame_rgb = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
+                    batch_bgrs.append(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
+                if not batch_bgrs:
                     break
-                if len(frame_data) != frame_bytes:
-                    raise RuntimeError(
-                        f"Unexpected end of rawvideo stream; expected {frame_bytes} bytes, got {len(frame_data)}."
-                    )
-                frame_rgb = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
-                batch_bgrs.append(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
-            if not batch_bgrs:
-                break
-            for output_bgr in colorizer.process_batch(batch_bgrs):
-                output_rgb = cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB)
-                writer.stdin.write(np.ascontiguousarray(output_rgb).tobytes())
-                frame_index += 1
+                for output_bgr in colorizer.process_batch(batch_bgrs):
+                    output_rgb = cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB)
+                    writer.stdin.write(np.ascontiguousarray(output_rgb).tobytes())
+                    frame_index += 1
+                    progress.update()
 
-        writer.stdin.close()
-        writer_returncode = writer.wait()
-        reader_returncode = reader.wait()
-    finally:
-        if reader.stdout is not None:
-            reader.stdout.close()
-        if writer.stdin is not None:
             writer.stdin.close()
+            writer_returncode = writer.wait()
+            reader_returncode = reader.wait()
+        finally:
+            if reader.stdout is not None:
+                reader.stdout.close()
+            if writer.stdin is not None:
+                writer.stdin.close()
 
-    if reader_returncode != 0:
-        raise RuntimeError(f"ffmpeg rawvideo reader failed: {reader.stderr.read().decode().strip()}")
-    if writer_returncode != 0:
-        raise RuntimeError(f"ffmpeg rawvideo writer failed: {writer.stderr.read().decode().strip()}")
+        if reader_returncode != 0:
+            raise RuntimeError(f"ffmpeg rawvideo reader failed: {reader.stderr.read().decode().strip()}")
+        if writer_returncode != 0:
+            raise RuntimeError(f"ffmpeg rawvideo writer failed: {writer.stderr.read().decode().strip()}")
     reader.stderr.close()
     writer.stderr.close()
 

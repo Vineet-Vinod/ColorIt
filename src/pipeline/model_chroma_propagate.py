@@ -6,7 +6,13 @@ import time
 import cv2
 import numpy as np
 
-from src.pipeline.ffmpeg_utils import ffprobe_media, open_rawvideo_reader, open_rawvideo_writer
+from src.pipeline.ffmpeg_utils import (
+    ffprobe_media,
+    open_rawvideo_reader,
+    open_rawvideo_writer,
+    playable_cfr_frame_count,
+)
+from src.pipeline.progress import ProgressBar
 
 
 CHROMA_TEMPORAL_ALPHA = 0.25
@@ -21,6 +27,7 @@ def run_model_chroma_propagate(
     chroma_blend: float,
     audio_input_path: Path | None = None,
     overwrite: bool,
+    progress_label: str = "Chroma propagation",
 ) -> int:
     source_path = source_path.expanduser().resolve()
     model_color_path = model_color_path.expanduser().resolve()
@@ -49,6 +56,8 @@ def run_model_chroma_propagate(
         fps=str(source_info["fps"]),
         chroma_blend=chroma_blend,
         audio_input_path=audio_input_path.expanduser().resolve() if audio_input_path is not None else source_path,
+        total_frames=playable_cfr_frame_count(source_info),
+        progress_label=progress_label,
     )
     if frame_count == 0:
         raise ValueError("No frames available for chroma propagation.")
@@ -69,6 +78,8 @@ def _stream_propagate_chroma(
     fps: str,
     chroma_blend: float,
     audio_input_path: Path,
+    total_frames: int,
+    progress_label: str,
 ) -> int:
     frame_bytes = width * height * 3
     blend = float(np.clip(chroma_blend, 0.0, 1.0))
@@ -91,42 +102,44 @@ def _stream_propagate_chroma(
     _ensure_pipe(model_reader.stdout, model_reader.stderr, "model rawvideo reader")
     _ensure_pipe(writer.stdin, writer.stderr, "rawvideo writer")
 
-    try:
-        while True:
-            source_data = _read_exact_or_none(source_reader.stdout, frame_bytes)
-            model_data = _read_exact_or_none(model_reader.stdout, frame_bytes)
-            if source_data is None or model_data is None:
-                break
+    with ProgressBar(progress_label, total=total_frames, unit="frame") as progress:
+        try:
+            while True:
+                source_data = _read_exact_or_none(source_reader.stdout, frame_bytes)
+                model_data = _read_exact_or_none(model_reader.stdout, frame_bytes)
+                if source_data is None or model_data is None:
+                    break
 
-            source_frame = np.frombuffer(source_data, dtype=np.uint8).reshape((height, width, 3))
-            model_frame = np.frombuffer(model_data, dtype=np.uint8).reshape((height, width, 3))
-            output_frame, previous_ab = _propagate_chroma_frame(
-                source_frame=source_frame,
-                model_frame=model_frame,
-                previous_ab=previous_ab,
-                chroma_blend=blend,
-            )
-            writer.stdin.write(np.ascontiguousarray(output_frame).tobytes())
-            frame_count += 1
+                source_frame = np.frombuffer(source_data, dtype=np.uint8).reshape((height, width, 3))
+                model_frame = np.frombuffer(model_data, dtype=np.uint8).reshape((height, width, 3))
+                output_frame, previous_ab = _propagate_chroma_frame(
+                    source_frame=source_frame,
+                    model_frame=model_frame,
+                    previous_ab=previous_ab,
+                    chroma_blend=blend,
+                )
+                writer.stdin.write(np.ascontiguousarray(output_frame).tobytes())
+                frame_count += 1
+                progress.update()
 
-        writer.stdin.close()
-        writer_returncode = writer.wait()
-        source_returncode = source_reader.wait()
-        model_returncode = model_reader.wait()
-    finally:
-        _close_pipe(source_reader.stdout)
-        _close_pipe(model_reader.stdout)
-        _close_pipe(writer.stdin)
+            writer.stdin.close()
+            writer_returncode = writer.wait()
+            source_returncode = source_reader.wait()
+            model_returncode = model_reader.wait()
+        finally:
+            _close_pipe(source_reader.stdout)
+            _close_pipe(model_reader.stdout)
+            _close_pipe(writer.stdin)
 
-    if source_returncode != 0:
-        raise RuntimeError(f"ffmpeg source rawvideo reader failed: {_read_stderr(source_reader)}")
-    if model_returncode != 0:
-        raise RuntimeError(f"ffmpeg model rawvideo reader failed: {_read_stderr(model_reader)}")
-    if writer_returncode != 0:
-        raise RuntimeError(f"ffmpeg rawvideo writer failed: {_read_stderr(writer)}")
-    _close_pipe(source_reader.stderr)
-    _close_pipe(model_reader.stderr)
-    _close_pipe(writer.stderr)
+        if source_returncode != 0:
+            raise RuntimeError(f"ffmpeg source rawvideo reader failed: {_read_stderr(source_reader)}")
+        if model_returncode != 0:
+            raise RuntimeError(f"ffmpeg model rawvideo reader failed: {_read_stderr(model_reader)}")
+        if writer_returncode != 0:
+            raise RuntimeError(f"ffmpeg rawvideo writer failed: {_read_stderr(writer)}")
+        _close_pipe(source_reader.stderr)
+        _close_pipe(model_reader.stderr)
+        _close_pipe(writer.stderr)
     return frame_count
 
 

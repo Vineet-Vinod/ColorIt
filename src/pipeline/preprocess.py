@@ -5,7 +5,13 @@ import numpy as np
 
 from pathlib import Path
 
-from src.pipeline.ffmpeg_utils import ffprobe_media, open_rawvideo_reader, open_rawvideo_writer
+from src.pipeline.ffmpeg_utils import (
+    ffprobe_media,
+    open_rawvideo_reader,
+    open_rawvideo_writer,
+    playable_cfr_frame_count,
+)
+from src.pipeline.progress import ProgressBar
 
 
 def apply_luma_clahe(
@@ -44,6 +50,7 @@ def equalize_clip_luma_clahe(
     strength: float = 0.70,
     crf: int = 16,
     include_audio: bool = True,
+    progress_label: str = "CLAHE",
 ) -> int:
     input_path = input_path.expanduser().resolve()
     output_path = output_path.expanduser().resolve()
@@ -72,38 +79,44 @@ def equalize_clip_luma_clahe(
     if writer.stdin is None or writer.stderr is None:
         raise RuntimeError("ffmpeg rawvideo writer failed to expose stdin/stderr pipes.")
 
-    try:
-        while True:
-            frame_data = reader.stdout.read(frame_bytes)
-            if not frame_data:
-                break
-            if len(frame_data) != frame_bytes:
-                raise RuntimeError(
-                    f"Unexpected end of rawvideo stream; expected {frame_bytes} bytes, got {len(frame_data)}."
+    with ProgressBar(
+        progress_label,
+        total=playable_cfr_frame_count(media_info),
+        unit="frame",
+    ) as progress:
+        try:
+            while True:
+                frame_data = reader.stdout.read(frame_bytes)
+                if not frame_data:
+                    break
+                if len(frame_data) != frame_bytes:
+                    raise RuntimeError(
+                        f"Unexpected end of rawvideo stream; expected {frame_bytes} bytes, got {len(frame_data)}."
+                    )
+                frame = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
+                equalized = apply_luma_clahe(
+                    frame,
+                    clip_limit=clip_limit,
+                    tile_grid_size=tile_grid_size,
+                    strength=strength,
                 )
-            frame = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
-            equalized = apply_luma_clahe(
-                frame,
-                clip_limit=clip_limit,
-                tile_grid_size=tile_grid_size,
-                strength=strength,
-            )
-            writer.stdin.write(np.ascontiguousarray(equalized).tobytes())
-            frame_count += 1
+                writer.stdin.write(np.ascontiguousarray(equalized).tobytes())
+                frame_count += 1
+                progress.update()
 
-        writer.stdin.close()
-        writer_returncode = writer.wait()
-        reader_returncode = reader.wait()
-    finally:
-        if reader.stdout is not None:
-            reader.stdout.close()
-        if writer.stdin is not None:
             writer.stdin.close()
+            writer_returncode = writer.wait()
+            reader_returncode = reader.wait()
+        finally:
+            if reader.stdout is not None:
+                reader.stdout.close()
+            if writer.stdin is not None:
+                writer.stdin.close()
 
-    if reader_returncode != 0:
-        raise RuntimeError(f"ffmpeg rawvideo reader failed: {reader.stderr.read().decode().strip()}")
-    if writer_returncode != 0:
-        raise RuntimeError(f"ffmpeg rawvideo writer failed: {writer.stderr.read().decode().strip()}")
+        if reader_returncode != 0:
+            raise RuntimeError(f"ffmpeg rawvideo reader failed: {reader.stderr.read().decode().strip()}")
+        if writer_returncode != 0:
+            raise RuntimeError(f"ffmpeg rawvideo writer failed: {writer.stderr.read().decode().strip()}")
     return frame_count
 
 

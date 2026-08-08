@@ -195,6 +195,7 @@ def run_colorize_batch(
                     strength=0.70,
                     crf=int(config.raw["video"]["crf"]),
                     include_audio=True,
+                    progress_label=f"CLAHE {scene_id}",
                 )
                 print(f"CLAHE source clip written: {equalized_clip_path.name} ({frame_count} frames)")
                 stage_runtimes["clahe"] = time.perf_counter() - stage_started
@@ -216,6 +217,7 @@ def run_colorize_batch(
                     overwrite=True,
                     model_bundle=shared_bundle,
                     include_audio=False,
+                    progress_label=f"DeOldify {scene_id}",
                 )
                 stage_runtimes["deoldify"] = time.perf_counter() - stage_started
 
@@ -233,6 +235,7 @@ def run_colorize_batch(
                     output_preset="ultrafast",
                     overwrite=True,
                     include_audio=False,
+                    progress_label=f"DDColor {scene_id}",
                 )
                 stage_runtimes["ddcolor"] = time.perf_counter() - stage_started
 
@@ -245,6 +248,7 @@ def run_colorize_batch(
                 chroma_blend=1.0,
                 audio_input_path=equalized_clip_path,
                 overwrite=True,
+                progress_label=f"Chroma propagation {scene_id}",
             )
             stage_runtimes["chroma_propagation"] = time.perf_counter() - stage_started
             status = BatchSceneStatus(

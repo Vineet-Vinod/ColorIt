@@ -6,7 +6,13 @@ import time
 import cv2
 import numpy as np
 
-from src.pipeline.ffmpeg_utils import ffprobe_media, open_rawvideo_reader, open_rawvideo_writer
+from src.pipeline.ffmpeg_utils import (
+    ffprobe_media,
+    open_rawvideo_reader,
+    open_rawvideo_writer,
+    playable_cfr_frame_count,
+)
+from src.pipeline.progress import ProgressBar
 
 
 DEFAULT_BACKGROUND_CHROMA_HOLD = {
@@ -33,6 +39,7 @@ def run_background_chroma_hold(
     output_path: Path,
     settings: dict[str, object] | None = None,
     overwrite: bool,
+    progress_label: str = "Background chroma hold",
 ) -> int:
     input_path = input_path.expanduser().resolve()
     output_path = output_path.expanduser().resolve()
@@ -52,6 +59,7 @@ def run_background_chroma_hold(
         output_path=output_path,
         media_info=media_info,
         settings=merged_settings,
+        progress_label=progress_label,
     )
     print(f"Background chroma hold written: {output_path}")
     print(f"Frames: {frame_count}")
@@ -65,6 +73,7 @@ def _stream_hold_chroma(
     output_path: Path,
     media_info: dict[str, str | int | float],
     settings: dict[str, object],
+    progress_label: str,
 ) -> int:
     width = int(media_info["width"])
     height = int(media_info["height"])
@@ -87,54 +96,63 @@ def _stream_hold_chroma(
     held_ab: np.ndarray | None = None
     previous_luma: np.ndarray | None = None
     frame_count = 0
-    try:
-        while True:
-            frame_data = _read_exact_or_none(reader.stdout, frame_bytes)
-            if frame_data is None:
-                break
+    with ProgressBar(
+        progress_label,
+        total=playable_cfr_frame_count(media_info),
+        unit="frame",
+    ) as progress:
+        try:
+            while True:
+                frame_data = _read_exact_or_none(reader.stdout, frame_bytes)
+                if frame_data is None:
+                    break
 
-            frame = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
-            lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB).astype(np.float32)
-            luma = lab[:, :, 0]
-            ab = lab[:, :, 1:3]
-            if reference_luma is None or held_ab is None or previous_luma is None:
-                reference_luma = luma.copy()
-                held_ab = ab.copy()
-                previous_luma = luma.copy()
-                output_frame = frame
-            else:
-                frame_delta = float(np.mean(np.abs(luma - previous_luma)))
-                if frame_delta >= float(settings["shot_change_threshold"]):
+                frame = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width, 3))
+                lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB).astype(np.float32)
+                luma = lab[:, :, 0]
+                ab = lab[:, :, 1:3]
+                if reference_luma is None or held_ab is None or previous_luma is None:
                     reference_luma = luma.copy()
                     held_ab = ab.copy()
+                    previous_luma = luma.copy()
                     output_frame = frame
                 else:
-                    output_lab, reference_luma, held_ab = _hold_frame_chroma(
-                        lab=lab,
-                        reference_luma=reference_luma,
-                        held_ab=held_ab,
-                        previous_luma=previous_luma,
-                        settings=settings,
-                    )
-                    output_frame = cv2.cvtColor(np.clip(output_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
-                previous_luma = luma.copy()
+                    frame_delta = float(np.mean(np.abs(luma - previous_luma)))
+                    if frame_delta >= float(settings["shot_change_threshold"]):
+                        reference_luma = luma.copy()
+                        held_ab = ab.copy()
+                        output_frame = frame
+                    else:
+                        output_lab, reference_luma, held_ab = _hold_frame_chroma(
+                            lab=lab,
+                            reference_luma=reference_luma,
+                            held_ab=held_ab,
+                            previous_luma=previous_luma,
+                            settings=settings,
+                        )
+                        output_frame = cv2.cvtColor(
+                            np.clip(output_lab, 0, 255).astype(np.uint8),
+                            cv2.COLOR_LAB2RGB,
+                        )
+                    previous_luma = luma.copy()
 
-            writer.stdin.write(np.ascontiguousarray(output_frame).tobytes())
-            frame_count += 1
+                writer.stdin.write(np.ascontiguousarray(output_frame).tobytes())
+                frame_count += 1
+                progress.update()
 
-        writer.stdin.close()
-        writer_returncode = writer.wait()
-        reader_returncode = reader.wait()
-    finally:
-        _close_pipe(reader.stdout)
-        _close_pipe(writer.stdin)
+            writer.stdin.close()
+            writer_returncode = writer.wait()
+            reader_returncode = reader.wait()
+        finally:
+            _close_pipe(reader.stdout)
+            _close_pipe(writer.stdin)
 
-    if reader_returncode != 0:
-        raise RuntimeError(f"ffmpeg rawvideo reader failed: {_read_stderr(reader)}")
-    if writer_returncode != 0:
-        raise RuntimeError(f"ffmpeg rawvideo writer failed: {_read_stderr(writer)}")
-    _close_pipe(reader.stderr)
-    _close_pipe(writer.stderr)
+        if reader_returncode != 0:
+            raise RuntimeError(f"ffmpeg rawvideo reader failed: {_read_stderr(reader)}")
+        if writer_returncode != 0:
+            raise RuntimeError(f"ffmpeg rawvideo writer failed: {_read_stderr(writer)}")
+        _close_pipe(reader.stderr)
+        _close_pipe(writer.stderr)
     return frame_count
 
 

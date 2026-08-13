@@ -1,10 +1,10 @@
-# ColorIt — Submission Narrative
+# ColorIt — Submission
 
 ## Concept and Impact
 
 ### Inspiration
 
-I love watching old Kannada movies. Seeing the restored and colorized version of *Kasturi Nivasa* made a familiar film feel immediate again. I was impressed by the result—and struck by how intensive, expensive, and slow that kind of restoration can be.
+I love watching old Kannada movies. Seeing the restored and colorized version of *Kasturi Nivasa* made a familiar film feel more alive and real. I was impressed by the result, and struck by how intensive, expensive, and slow that kind of restoration can be.
 
 I wanted a faster alternative: an AI-assisted pipeline that an individual could run without a restoration studio, while still preserving the timing, audio, and character of the original film.
 
@@ -30,7 +30,7 @@ ColorIt reduces a process that can take several weeks of team effort to a few ho
 
 Skies, water, terrain, vegetation, and many actor shots already colorize convincingly. Costume palettes, high motion, and cross-cut identity are still imperfect, but those are focused research problems rather than reasons to keep restoration inaccessible. As consistency improves, films that currently live mainly in archives can gain a new life with modern audiences.
 
-The same local AI viewing layer can eventually combine colorization, detail reconstruction, multilingual subtitles, translation, voice, and lip synchronization—making historical and personal media more immersive across devices and languages.
+The same local AI viewing layer can eventually combine colorization, detail reconstruction, multilingual subtitles, translation, voice, and lip synchronization, making historical and personal media more immersive across devices and languages.
 
 ## Technical Architecture
 

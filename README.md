@@ -1,12 +1,12 @@
 # ColorIt
 
-**Give an old film a new life—with one command.**
+**Give an old film a new life with one command.**
 
 ColorIt is a local, automatic full-movie colorization pipeline for black-and-white films. Give it a movie, let it work scene by scene, and get back a compressed color movie with the original timing and audio preserved.
 
 ## Inspiration
 
-I love watching old Kannada movies. Seeing the restored and colorized version of *Kasturi Nivasa* was a small revelation: familiar cinema suddenly felt immediate again. The result was beautiful, but the restoration behind it was also intensive, expensive, and slow.
+I love watching old Kannada movies. Seeing the restored and colorized version of *Kasturi Nivasa* was a small revelation: familiar cinema suddenly felt more alive. The result was beautiful, but the restoration behind it was also intensive, expensive, and slow.
 
 That led to a simple question: **could one person give an old film a credible second life in hours, on a computer they already own, instead of needing weeks of frame-by-frame work from a specialist team?** ColorIt is my attempt to make that possible with AI colorization models and practical video post-processing.
 
@@ -20,7 +20,7 @@ Existing image colorizers also do not automatically become movie colorizers. A p
 
 ColorIt turns that process into a single local command. It detects scenes, gently restores luma contrast, runs two complementary AI colorizers, temporally smooths their chroma in Lab color space, reassembles the movie, restores the original audio, validates timing, and compresses the result to a size-aware target.
 
-The goal is not to replace restoration artists. It is to put a useful first restoration pass within reach of anyone—and give experts a faster starting point.
+The goal is not to replace restoration artists. It is to put a useful first restoration pass within reach of anyone, and give experts a faster starting point.
 
 ## Target Users
 
@@ -100,7 +100,7 @@ OpenAI Codex was the primary AI development collaborator for ColorIt. The develo
 4. Inspect frames and videos, compare the result with the baseline, and decide whether to integrate, revise, or discard the idea.
 5. Repeat until the simplest useful pipeline remained.
 
-Codex accelerated research, implementation, debugging, and documentation; human review of actual video results controlled the product and technical decisions. At runtime, ColorIt uses DeOldify and DDColor locally—Codex is not part of movie inference.
+Codex accelerated research, implementation, debugging, and documentation; human review of actual video results controlled the product and technical decisions. At runtime, ColorIt uses DeOldify and DDColor locally and Codex is not part of movie inference.
 
 ## Requirements
 
@@ -144,7 +144,7 @@ uv run colorit colorize-movie \
 
 On a CPU-only laptop, allow approximately **60–90 minutes**, depending on the processor and available memory. For reference, the same class of workload takes roughly **2–3 minutes per source minute** on an M3 Ultra Mac Studio.
 
-## Colorize Your Own Movie
+## Color Your Own Movie
 
 ```bash
 uv run colorit colorize-movie --input /path/to/movie.mp4 --overwrite

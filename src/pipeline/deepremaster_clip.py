@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 import time
+import warnings
 
 import cv2
 import mlx.core as mx
@@ -34,6 +35,9 @@ class DeepRemasterClipRecord:
     inference_height: int
     temporal_block_size: int
     precision: str
+    reference_min_dimension: int
+    restoration_strength: float
+    chroma_gain: float
     compiled: bool
     runtime_seconds: float
     inference_seconds: float
@@ -56,6 +60,9 @@ class DeepRemasterRunner:
         dense_max_scores: int = 32_000_000,
         source_tile_size: int = 1024,
         reference_tile_size: int = 2048,
+        reference_min_dimension: int = 256,
+        restoration_strength: float = 1.0,
+        chroma_gain: float = 1.0,
     ) -> None:
         if precision not in {"float16", "float32"}:
             raise ValueError("DeepRemaster precision must be float16 or float32")
@@ -63,6 +70,12 @@ class DeepRemasterRunner:
             raise ValueError("DeepRemaster minimum dimension must be at least 32")
         if temporal_block_size < 1:
             raise ValueError("DeepRemaster temporal block size must be positive")
+        if reference_min_dimension < 16:
+            raise ValueError("DeepRemaster reference minimum dimension must be at least 16")
+        if not 0.0 <= restoration_strength <= 1.0:
+            raise ValueError("DeepRemaster restoration strength must be between 0 and 1")
+        if chroma_gain <= 0.0:
+            raise ValueError("DeepRemaster chroma gain must be positive")
         if not converted_weights_path.exists():
             convert_official_checkpoint(
                 checkpoint_path,
@@ -78,6 +91,9 @@ class DeepRemasterRunner:
         self.precision = precision
         self.min_dimension = min_dimension
         self.temporal_block_size = temporal_block_size
+        self.reference_min_dimension = reference_min_dimension
+        self.restoration_strength = restoration_strength
+        self.chroma_gain = chroma_gain
         self.compile_model = compile_model
         self._compiled_forward = None
         if compile_model:
@@ -99,6 +115,7 @@ class DeepRemasterRunner:
         progress_label: str,
         output_crf: int = 16,
         output_preset: str = "ultrafast",
+        output_pixel_format: str = "yuv420p",
     ) -> DeepRemasterClipRecord:
         input_path = input_path.expanduser().resolve()
         output_path = output_path.expanduser().resolve()
@@ -118,7 +135,11 @@ class DeepRemasterRunner:
             height,
             min_dimension=self.min_dimension,
         )
-        reference_tensor = _prepare_references(references, precision=self.precision)
+        reference_tensor = _prepare_references(
+            references,
+            precision=self.precision,
+            min_dimension=self.reference_min_dimension,
+        )
         reference_features = self.model.prepare_references(reference_tensor)
         mx.eval(reference_features.level8, reference_features.level16)
 
@@ -130,7 +151,7 @@ class DeepRemasterRunner:
             fps=str(media["fps"]),
             video_codec="libx264",
             crf=output_crf,
-            pixel_format="yuv420p",
+            pixel_format=output_pixel_format,
             preset=output_preset,
             audio_input_path=None,
         )
@@ -185,8 +206,11 @@ class DeepRemasterRunner:
                     outputs = _lab_to_rgb_frames(
                         restored,
                         ab,
+                        source_frames=frames,
                         output_width=width,
                         output_height=height,
+                        restoration_strength=self.restoration_strength,
+                        chroma_gain=self.chroma_gain,
                     )
                     for output in outputs:
                         writer.stdin.write(np.ascontiguousarray(output).tobytes())
@@ -223,6 +247,9 @@ class DeepRemasterRunner:
             inference_height=inference_height,
             temporal_block_size=self.temporal_block_size,
             precision=self.precision,
+            reference_min_dimension=self.reference_min_dimension,
+            restoration_strength=self.restoration_strength,
+            chroma_gain=self.chroma_gain,
             compiled=self.compile_model,
             runtime_seconds=round(runtime_seconds, 6),
             inference_seconds=round(inference_seconds, 6),
@@ -262,15 +289,20 @@ def _prepare_luma(
     return result.astype(mx.float16 if precision == "float16" else mx.float32)
 
 
-def _prepare_references(reference_paths: list[Path], *, precision: str):
+def _prepare_references(
+    reference_paths: list[Path],
+    *,
+    precision: str,
+    min_dimension: int = 256,
+):
     images = [Image.open(path).convert("RGB") for path in reference_paths]
     aspect = sum(image.width / image.height for image in images) / len(images)
     if aspect >= 1.0:
-        target_width = int(256 * aspect)
-        target_height = 256
+        target_width = int(min_dimension * aspect)
+        target_height = min_dimension
     else:
-        target_width = 256
-        target_height = int(256 / aspect)
+        target_width = min_dimension
+        target_height = int(min_dimension / aspect)
 
     prepared = []
     for image in images:
@@ -288,18 +320,41 @@ def _prepare_references(reference_paths: list[Path], *, precision: str):
     return result.astype(mx.float16 if precision == "float16" else mx.float32)
 
 
-def _lab_to_rgb_frames(restored, ab, *, output_width: int, output_height: int) -> list[np.ndarray]:
+def _lab_to_rgb_frames(
+    restored,
+    ab,
+    *,
+    source_frames: list[np.ndarray],
+    output_width: int,
+    output_height: int,
+    restoration_strength: float = 1.0,
+    chroma_gain: float = 1.0,
+) -> list[np.ndarray]:
     restored_np = np.asarray(restored, dtype=np.float32)[0]
     ab_np = np.asarray(ab, dtype=np.float32)[0]
     outputs = []
-    for luma, chroma in zip(restored_np, ab_np, strict=True):
-        lab = np.empty((*luma.shape[:2], 3), dtype=np.float32)
-        lab[:, :, 0] = luma[:, :, 0] * 100.0
-        lab[:, :, 1:3] = np.clip(chroma * 255.0 - 128.0, -100.0, 100.0)
-        rgb = color.lab2rgb(lab.astype(np.float64))
+    for luma, chroma, source in zip(restored_np, ab_np, source_frames, strict=True):
+        restored_luma = cv2.resize(
+            luma[:, :, 0],
+            (output_width, output_height),
+            interpolation=cv2.INTER_CUBIC,
+        )
+        predicted_ab = cv2.resize(
+            chroma * 255.0 - 128.0,
+            (output_width, output_height),
+            interpolation=cv2.INTER_CUBIC,
+        )
+        source_luma = color.rgb2lab(source.astype(np.float64) / 255.0)[:, :, 0]
+        lab = np.empty((output_height, output_width, 3), dtype=np.float64)
+        lab[:, :, 0] = (
+            source_luma * (1.0 - restoration_strength)
+            + restored_luma * 100.0 * restoration_strength
+        )
+        lab[:, :, 1:3] = np.clip(predicted_ab * chroma_gain, -100.0, 100.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            rgb = color.lab2rgb(lab.astype(np.float64))
         rgb = np.clip(rgb * 255.0, 0.0, 255.0).astype(np.uint8)
-        if rgb.shape[:2] != (output_height, output_width):
-            rgb = cv2.resize(rgb, (output_width, output_height), interpolation=cv2.INTER_CUBIC)
         outputs.append(rgb)
     return outputs
 

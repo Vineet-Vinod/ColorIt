@@ -5,6 +5,7 @@ description = "Movie-first DeOldify pipeline for black-and-white film colorizati
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
+  "mlx>=0.29,<1",
   "numpy>=1.26,<3",
   "opencv-python-headless>=4.10,<5",
   "Pillow>=10,<12",

@@ -16,6 +16,7 @@ runtime:
 
 deep_remaster:
   scene_threshold: 0.25
+  keyframe_positions: [0.2, 0.5, 0.8]
   precision: float16
   min_dimension: 192
   temporal_block_size: 5

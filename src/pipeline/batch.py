@@ -5,6 +5,8 @@ from pathlib import Path
 import time
 from typing import Any
 
+import cv2
+
 from src.pipeline.colorize_clip import run_deoldify_clip
 from src.pipeline.config import AppConfig
 from src.pipeline.ddcolor_clip import DEFAULT_DDCOLOR_WEIGHTS_PATH, run_ddcolor_clip
@@ -17,7 +19,12 @@ from src.pipeline.ffmpeg_utils import (
     split_video_by_frame_counts,
 )
 from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
-from src.pipeline.keyframes import KeyframeColorizer, keyframe_record_to_dict
+from src.pipeline.keyframes import (
+    KeyframeColorizer,
+    keyframe_colored_paths,
+    keyframe_record_to_dict,
+    normalize_keyframe_positions,
+)
 from src.pipeline.model_chroma_propagate import run_model_chroma_propagate
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
@@ -40,6 +47,7 @@ class BatchSceneStatus:
     stage_runtime_seconds: dict[str, float] | None = None
     error: str | None = None
     keyframe: dict[str, Any] | None = None
+    keyframes: list[dict[str, Any]] | None = None
     deepremaster: dict[str, Any] | None = None
 
 
@@ -86,6 +94,14 @@ def run_colorize_batch(
     ):
         directory.mkdir(parents=True, exist_ok=True)
     cleanup_scene_clips = bool(config.raw.get("runtime", {}).get("cleanup_scene_clips", True))
+    deepremaster_settings = config.raw.get("deep_remaster", {})
+    keyframe_positions = (
+        normalize_keyframe_positions(
+            deepremaster_settings.get("keyframe_positions", [0.2, 0.5, 0.8])
+        )
+        if pipeline == "deepremaster"
+        else []
+    )
 
     batch_manifest_path = paths.manifest_dir / f"full_run_{run_id}.json"
     scene_runs_manifest_path = paths.manifest_dir / f"scene_runs_{run_id}.json"
@@ -99,6 +115,7 @@ def run_colorize_batch(
         limit=limit,
         pipeline=pipeline,
         coloring_model=coloring_model,
+        keyframe_positions=keyframe_positions,
     )
     batch_payload["status"] = "running"
     batch_payload["updated_at"] = utc_now_iso()
@@ -148,6 +165,16 @@ def run_colorize_batch(
             scene_output_dir=scene_output_dir,
             colorized_output_dir=colorized_output_dir,
             resume=resume,
+            pipeline=pipeline,
+            expected_reference_paths=(
+                keyframe_colored_paths(
+                    scene_id=str(scene["scene_id"]),
+                    colored_dir=keyframe_colored_dir,
+                    positions=keyframe_positions,
+                )
+                if pipeline == "deepremaster"
+                else []
+            ),
         )
     }
     resumed_duration = sum(
@@ -219,26 +246,25 @@ def run_colorize_batch(
                 stage_runtimes["scene_extraction"] = 0.0
 
             if pipeline == "deepremaster":
-                keyframe_path = keyframe_colored_dir / f"{scene_id}.png"
-                keyframe_record = None
-                if resume and keyframe_path.exists() and keyframe_path.stat().st_size > 0:
-                    print(f"Reusing {coloring_model} keyframe: {keyframe_path.name}")
-                    stage_runtimes["keyframe_colorization"] = 0.0
-                else:
-                    stage_started = time.perf_counter()
-                    if keyframe_colorizer is None:
-                        raise RuntimeError("DeepRemaster keyframe colorizer was not initialized")
-                    keyframe_record = keyframe_colorizer.colorize_scene_midpoint(
-                        scene_id=scene_id,
-                        clip_path=scene_clip_path,
-                        source_dir=keyframe_source_dir,
-                        colored_dir=keyframe_colored_dir,
-                    )
-                    stage_runtimes["keyframe_colorization"] = time.perf_counter() - stage_started
+                if keyframe_colorizer is None:
+                    raise RuntimeError("DeepRemaster keyframe colorizer was not initialized")
+                stage_started = time.perf_counter()
+                keyframe_records = keyframe_colorizer.colorize_scene_references(
+                    scene_id=scene_id,
+                    clip_path=scene_clip_path,
+                    source_dir=keyframe_source_dir,
+                    colored_dir=keyframe_colored_dir,
+                    positions=keyframe_positions,
+                    reuse_existing=resume,
+                )
+                stage_runtimes["keyframe_colorization"] = time.perf_counter() - stage_started
+                for keyframe_record in keyframe_records:
+                    if keyframe_record.reused:
+                        print(f"Reusing {coloring_model} keyframe: {Path(keyframe_record.colored_path).name}")
+                keyframe_paths = [Path(record.colored_path) for record in keyframe_records]
 
                 if deepremaster_runner is None:
-                    settings = config.raw.get("deep_remaster", {})
-                    precision = str(settings.get("precision", "float16"))
+                    precision = str(deepremaster_settings.get("precision", "float16"))
                     deepremaster_runner = DeepRemasterRunner(
                         checkpoint_path=paths.root / DEFAULT_DEEPREMASTER_WEIGHTS_PATH,
                         converted_weights_path=(
@@ -247,18 +273,18 @@ def run_colorize_batch(
                             / f"remasternet.{precision}.mlx.safetensors"
                         ),
                         precision=precision,
-                        min_dimension=int(settings.get("min_dimension", 192)),
-                        temporal_block_size=int(settings.get("temporal_block_size", 5)),
-                        compile_model=bool(settings.get("compile", True)),
-                        dense_max_scores=int(settings.get("dense_max_scores", 32_000_000)),
-                        source_tile_size=int(settings.get("source_tile_size", 1024)),
-                        reference_tile_size=int(settings.get("reference_tile_size", 2048)),
+                        min_dimension=int(deepremaster_settings.get("min_dimension", 192)),
+                        temporal_block_size=int(deepremaster_settings.get("temporal_block_size", 5)),
+                        compile_model=bool(deepremaster_settings.get("compile", True)),
+                        dense_max_scores=int(deepremaster_settings.get("dense_max_scores", 32_000_000)),
+                        source_tile_size=int(deepremaster_settings.get("source_tile_size", 1024)),
+                        reference_tile_size=int(deepremaster_settings.get("reference_tile_size", 2048)),
                     )
                 stage_started = time.perf_counter()
                 deepremaster_record = deepremaster_runner.run_clip(
                     input_path=scene_clip_path,
                     output_path=colorized_clip_path,
-                    reference_paths=[keyframe_path],
+                    reference_paths=keyframe_paths,
                     overwrite=True,
                     progress_label=f"DeepRemaster {coloring_model} {scene_id}",
                     output_crf=int(config.raw["video"]["crf"]),
@@ -273,10 +299,11 @@ def run_colorize_batch(
                     runtime_seconds=time.perf_counter() - started,
                     stage_runtime_seconds=stage_runtimes,
                     keyframe=(
-                        keyframe_record_to_dict(keyframe_record)
-                        if keyframe_record is not None
-                        else {"model": coloring_model, "colored_path": str(keyframe_path), "reused": True}
+                        keyframe_record_to_dict(keyframe_records[0])
+                        if len(keyframe_records) == 1
+                        else None
                     ),
+                    keyframes=[keyframe_record_to_dict(record) for record in keyframe_records],
                     deepremaster=clip_record_to_dict(deepremaster_record),
                 )
                 if cleanup_scene_clips and scene_clip_path.exists():
@@ -404,6 +431,8 @@ def _can_resume_completed_scene(
     scene_output_dir: Path,
     colorized_output_dir: Path,
     resume: bool,
+    pipeline: str,
+    expected_reference_paths: list[Path],
 ) -> bool:
     if not resume:
         return False
@@ -413,6 +442,12 @@ def _can_resume_completed_scene(
     if not _is_usable_video(colorized_clip_path, reference_path=scene_clip_path):
         return False
     existing_status = _get_scene_status(batch_payload, scene_id)
+    if pipeline == "deepremaster":
+        if existing_status is None or existing_status.get("status") != "succeeded":
+            return False
+        if not all(_is_usable_image(path) for path in expected_reference_paths):
+            return False
+        return _recorded_keyframe_paths(existing_status) == [str(path) for path in expected_reference_paths]
     return (
         existing_status is None
         or existing_status.get("status") == "succeeded"
@@ -558,9 +593,9 @@ def _invalidate_scene_artifacts(
             if candidate.exists():
                 candidate.unlink()
         for directory in (keyframe_source_dir, keyframe_colored_dir):
-            candidate = directory / f"{scene_id}.png"
-            if candidate.exists():
-                candidate.unlink()
+            for candidate in (directory / f"{scene_id}.png", *directory.glob(f"{scene_id}__p*.png")):
+                if candidate.exists():
+                    candidate.unlink()
     if scene_extraction_manifest_path.exists():
         scene_extraction_manifest_path.unlink()
 
@@ -600,6 +635,7 @@ def _load_batch_manifest(
     limit: int | None,
     pipeline: str,
     coloring_model: str,
+    keyframe_positions: list[float],
 ) -> dict[str, Any]:
     if resume:
         payload = load_json_manifest(batch_manifest_path, {})
@@ -611,7 +647,18 @@ def _load_batch_manifest(
             same_limit = payload.get("limit") == limit
             same_pipeline = payload.get("pipeline", "default") == pipeline
             same_coloring_model = payload.get("coloring_model", "deoldify") == coloring_model
-            if same_movie and same_scene_manifest and same_limit and same_pipeline and same_coloring_model:
+            stored_positions = payload.get("deepremaster_keyframe_positions", [0.5])
+            same_keyframe_positions = (
+                pipeline != "deepremaster" or stored_positions == keyframe_positions
+            )
+            if (
+                same_movie
+                and same_scene_manifest
+                and same_limit
+                and same_pipeline
+                and same_coloring_model
+                and same_keyframe_positions
+            ):
                 payload.setdefault("scene_runs", [])
                 payload["scene_count"] = scene_count
                 payload["updated_at"] = utc_now_iso()
@@ -625,6 +672,7 @@ def _load_batch_manifest(
         "limit": limit,
         "pipeline": pipeline,
         "coloring_model": coloring_model,
+        "deepremaster_keyframe_positions": keyframe_positions if pipeline == "deepremaster" else [],
         "status": "pending",
         "succeeded_scene_count": 0,
         "failed_scene_count": 0,
@@ -675,6 +723,27 @@ def _sum_stage_runtimes(runs: list[dict[str, Any]]) -> dict[str, float]:
         for stage_name, runtime_seconds in stage_runtimes.items():
             totals[stage_name] = totals.get(stage_name, 0.0) + float(runtime_seconds)
     return {stage_name: round(runtime_seconds, 3) for stage_name, runtime_seconds in totals.items()}
+
+
+def _recorded_keyframe_paths(status: dict[str, Any]) -> list[str]:
+    keyframes = status.get("keyframes")
+    if isinstance(keyframes, list):
+        return [
+            str(record["colored_path"])
+            for record in keyframes
+            if isinstance(record, dict) and isinstance(record.get("colored_path"), str)
+        ]
+    keyframe = status.get("keyframe")
+    if isinstance(keyframe, dict) and isinstance(keyframe.get("colored_path"), str):
+        return [str(keyframe["colored_path"])]
+    return []
+
+
+def _is_usable_image(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size <= 0:
+        return False
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    return image is not None and image.size > 0
 
 
 def _is_usable_video(path: Path, *, reference_path: Path | None = None) -> bool:

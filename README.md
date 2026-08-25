@@ -51,7 +51,7 @@ The longer-term opportunity is broader than colorization. The same local, AI-ass
 - **Timing safety checks** covering frame count, frame rate, and duration before a run is accepted as complete.
 - **Size-aware delivery** with H.264 compression retries targeting at most `1.5x` the input size by default.
 - **Automatic cleanup** of intermediate clips and manifests after successful runs.
-- **Reference-guided DeepRemaster mode** using one DeOldify Artistic or DDColor keyframe per detected scene and an optimized MLX temporal model.
+- **Reference-guided DeepRemaster mode** using three scene-relative DeOldify Artistic or DDColor keyframes per detected scene and an optimized MLX temporal model.
 
 ## Architecture
 
@@ -181,7 +181,7 @@ uv run colorit colorize-movie \
   --overwrite
 ```
 
-Use DDColor keyframes by changing the last option to `--coloring-model ddcolor`. DeepRemaster mode detects scenes, colors each scene midpoint as a reference, restores and propagates color through five-frame temporal blocks, preserves the source frame rate and audio, and uses the normal size-aware final assembly.
+Use DDColor keyframes by changing the last option to `--coloring-model ddcolor`. DeepRemaster mode detects scenes, colors references at 20%, 50%, and 80% of every scene by default, then restores and propagates color through five-frame temporal blocks. This gives the model multiple costume and lighting views without crossing scene boundaries. Set `deep_remaster.keyframe_positions` in the config to another non-empty list of positions from `0.0` through `1.0`; a one-item list keeps the original single-reference artifact naming and behavior. The mode preserves the source frame rate and audio and uses the normal size-aware final assembly.
 
 The MLX port stores tensors in native channels-last order, folds inference batch normalization into 3D convolutions, caches reference features, compiles the graph, and uses exact tiled online-softmax attention when a dense attention map would be too large. The default runs at a 192-pixel short edge with FP16 weights, then returns frames to the source resolution for encoding. These settings keep inference near real time on the tested M3 Ultra while retaining visibly stronger reference color than the faster 128-pixel setting.
 

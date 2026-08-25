@@ -36,6 +36,11 @@ def add_movie_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
+        "--keep-intermediates",
+        action="store_true",
+        help="Preserve scene clips, colored keyframes, and run manifests after completion.",
+    )
+    parser.add_argument(
         "--pipeline",
         choices=("default", "deepremaster"),
         default="default",
@@ -65,7 +70,7 @@ def handle_colorize_movie(args: argparse.Namespace) -> int:
         movie_path=Path(args.input),
         output_path=Path(args.output) if args.output else None,
         scene_threshold=None,
-        keep_intermediates=False,
+        keep_intermediates=bool(args.keep_intermediates),
         resume=bool(args.resume),
         limit=None,
         overwrite=bool(args.overwrite),

@@ -44,9 +44,9 @@ video:
 compression:
   video_codec: libx264
   preset: medium
-  crf: 18
+  crf: 26
   max_size_multiplier: 2.0
-  retry_crfs: [20, 22, 24]
+  retry_crfs: [28, 30]
   audio_codec: aac
   audio_bitrate: 160k
   faststart: true

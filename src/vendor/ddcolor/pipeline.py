@@ -11,7 +11,7 @@ def load_checkpoint_state_dict(model_path: str, map_location="cpu"):
     - {'params': state_dict, ...} (common in this repo)
     - raw state_dict
     """
-    ckpt = torch.load(model_path, map_location=map_location)
+    ckpt = torch.load(model_path, map_location=map_location, weights_only=True)
     if isinstance(ckpt, dict) and "params" in ckpt:
         return ckpt["params"]
     return ckpt

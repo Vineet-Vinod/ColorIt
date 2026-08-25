@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import torch
 
 from src.pipeline.config import AppConfig
-from src.pipeline.model_arch import DeoldifyVideoModel
+from src.pipeline.model_arch import DeoldifyArtisticModel, DeoldifyVideoModel
 from src.pipeline.paths import resolve_project_paths
 
 
@@ -54,6 +54,20 @@ def load_colorizer_bundle(config: AppConfig) -> ModelBundle:
         model = torch.compile(model, **compile_kwargs)
     model.eval()
 
+    return ModelBundle(model=model, device=device, backend=backend)
+
+
+def load_artistic_colorizer_bundle(
+    config: AppConfig,
+    *,
+    weights_path,
+) -> ModelBundle:
+    device, backend = select_device(config)
+    model = DeoldifyArtisticModel()
+    checkpoint = _load_checkpoint(weights_path)
+    model.load_state_dict(checkpoint["model"], strict=True)
+    model.to(device)
+    model.eval()
     return ModelBundle(model=model, device=device, backend=backend)
 
 

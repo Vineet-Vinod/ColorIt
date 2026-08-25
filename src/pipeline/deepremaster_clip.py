@@ -38,6 +38,7 @@ class DeepRemasterClipRecord:
     reference_min_dimension: int
     restoration_strength: float
     chroma_gain: float
+    lab_backend: str
     compiled: bool
     runtime_seconds: float
     inference_seconds: float
@@ -63,6 +64,7 @@ class DeepRemasterRunner:
         reference_min_dimension: int = 256,
         restoration_strength: float = 1.0,
         chroma_gain: float = 1.0,
+        lab_backend: str = "opencv",
     ) -> None:
         if precision not in {"float16", "float32"}:
             raise ValueError("DeepRemaster precision must be float16 or float32")
@@ -76,6 +78,8 @@ class DeepRemasterRunner:
             raise ValueError("DeepRemaster restoration strength must be between 0 and 1")
         if chroma_gain <= 0.0:
             raise ValueError("DeepRemaster chroma gain must be positive")
+        if lab_backend not in {"opencv", "skimage"}:
+            raise ValueError("DeepRemaster Lab backend must be opencv or skimage")
         if not converted_weights_path.exists():
             convert_official_checkpoint(
                 checkpoint_path,
@@ -94,6 +98,7 @@ class DeepRemasterRunner:
         self.reference_min_dimension = reference_min_dimension
         self.restoration_strength = restoration_strength
         self.chroma_gain = chroma_gain
+        self.lab_backend = lab_backend
         self.compile_model = compile_model
         self._compiled_forward = None
         if compile_model:
@@ -238,6 +243,7 @@ class DeepRemasterRunner:
                         output_height=height,
                         restoration_strength=self.restoration_strength,
                         chroma_gain=self.chroma_gain,
+                        lab_backend=self.lab_backend,
                     )
                     for output in outputs:
                         writer.stdin.write(np.ascontiguousarray(output).tobytes())
@@ -277,6 +283,7 @@ class DeepRemasterRunner:
             reference_min_dimension=self.reference_min_dimension,
             restoration_strength=self.restoration_strength,
             chroma_gain=self.chroma_gain,
+            lab_backend=self.lab_backend,
             compiled=self.compile_model,
             runtime_seconds=round(runtime_seconds, 6),
             inference_seconds=round(inference_seconds, 6),
@@ -356,6 +363,7 @@ def _lab_to_rgb_frames(
     output_height: int,
     restoration_strength: float = 1.0,
     chroma_gain: float = 1.0,
+    lab_backend: str = "opencv",
 ) -> list[np.ndarray]:
     restored_np = np.asarray(restored, dtype=np.float32)[0]
     ab_np = np.asarray(ab, dtype=np.float32)[0]
@@ -371,16 +379,30 @@ def _lab_to_rgb_frames(
             (output_width, output_height),
             interpolation=cv2.INTER_CUBIC,
         )
-        source_luma = color.rgb2lab(source.astype(np.float64) / 255.0)[:, :, 0]
         lab = np.empty((output_height, output_width, 3), dtype=np.float64)
-        lab[:, :, 0] = (
-            source_luma * (1.0 - restoration_strength)
-            + restored_luma * 100.0 * restoration_strength
-        )
+        if restoration_strength == 1.0:
+            lab[:, :, 0] = restored_luma * 100.0
+        else:
+            if lab_backend == "opencv":
+                source_luma = cv2.cvtColor(
+                    source.astype(np.float32) / 255.0,
+                    cv2.COLOR_RGB2LAB,
+                )[:, :, 0]
+            else:
+                source_luma = color.rgb2lab(source.astype(np.float64) / 255.0)[:, :, 0]
+            lab[:, :, 0] = (
+                source_luma * (1.0 - restoration_strength)
+                + restored_luma * 100.0 * restoration_strength
+            )
         lab[:, :, 1:3] = np.clip(predicted_ab * chroma_gain, -100.0, 100.0)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            rgb = color.lab2rgb(lab.astype(np.float64))
+        if lab_backend == "opencv":
+            rgb = cv2.cvtColor(lab.astype(np.float32), cv2.COLOR_LAB2RGB)
+        elif lab_backend == "skimage":
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                rgb = color.lab2rgb(lab.astype(np.float64))
+        else:
+            raise ValueError("DeepRemaster Lab backend must be opencv or skimage")
         rgb = np.clip(rgb * 255.0, 0.0, 255.0).astype(np.uint8)
         outputs.append(rgb)
     return outputs

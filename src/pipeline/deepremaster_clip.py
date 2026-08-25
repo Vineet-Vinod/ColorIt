@@ -8,6 +8,7 @@ import cv2
 import mlx.core as mx
 import numpy as np
 from PIL import Image
+from skimage import color
 
 from src.pipeline.deepremaster_mlx import (
     ReferenceFeatures,
@@ -253,7 +254,7 @@ def _prepare_luma(
         resized = cv2.resize(
             frame,
             (inference_width, inference_height),
-            interpolation=cv2.INTER_AREA,
+            interpolation=cv2.INTER_LINEAR,
         )
         lumas.append(cv2.cvtColor(resized, cv2.COLOR_RGB2GRAY))
     array = np.stack(lumas).astype(np.float32)[None, :, :, :, None] / 255.0
@@ -265,17 +266,17 @@ def _prepare_references(reference_paths: list[Path], *, precision: str):
     images = [Image.open(path).convert("RGB") for path in reference_paths]
     aspect = sum(image.width / image.height for image in images) / len(images)
     if aspect >= 1.0:
-        target_width = max(16, int(round((256 * aspect) / 16.0)) * 16)
+        target_width = int(256 * aspect)
         target_height = 256
     else:
         target_width = 256
-        target_height = max(16, int(round((256 / aspect) / 16.0)) * 16)
+        target_height = int(256 / aspect)
 
     prepared = []
     for image in images:
-        scale = min(target_width / image.width, target_height / image.height)
-        resized_width = max(1, min(target_width, int(round(image.width * scale))))
-        resized_height = max(1, min(target_height, int(round(image.height * scale))))
+        scale = max(target_width, target_height) / max(image.width, image.height)
+        resized_width = max(16, int(image.width * scale / 16.0) * 16)
+        resized_height = max(16, int(image.height * scale / 16.0) * 16)
         resized = image.resize((resized_width, resized_height), Image.Resampling.BICUBIC)
         canvas = Image.new("RGB", (target_width, target_height))
         canvas.paste(
@@ -295,7 +296,7 @@ def _lab_to_rgb_frames(restored, ab, *, output_width: int, output_height: int) -
         lab = np.empty((*luma.shape[:2], 3), dtype=np.float32)
         lab[:, :, 0] = luma[:, :, 0] * 100.0
         lab[:, :, 1:3] = np.clip(chroma * 255.0 - 128.0, -100.0, 100.0)
-        rgb = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+        rgb = color.lab2rgb(lab.astype(np.float64))
         rgb = np.clip(rgb * 255.0, 0.0, 255.0).astype(np.uint8)
         if rgb.shape[:2] != (output_height, output_width):
             rgb = cv2.resize(rgb, (output_width, output_height), interpolation=cv2.INTER_CUBIC)

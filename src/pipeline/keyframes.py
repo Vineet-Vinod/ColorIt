@@ -12,7 +12,7 @@ from PIL import Image
 from src.pipeline.config import AppConfig
 from src.pipeline.ddcolor_clip import _load_colorizer, _select_device
 from src.pipeline.ffmpeg_utils import extract_single_frame, ffprobe_media
-from src.pipeline.inference import colorize_image_file
+from src.pipeline.inference import colorize_rgb_batch
 from src.pipeline.model_loader import ModelBundle, load_artistic_colorizer_bundle
 from src.pipeline.weights import (
     DEFAULT_DDCOLOR_WEIGHTS_PATH,
@@ -144,24 +144,23 @@ class KeyframeColorizer:
         source_dir.mkdir(parents=True, exist_ok=True)
         colored_dir.mkdir(parents=True, exist_ok=True)
 
-        records: list[KeyframeRecord] = []
-        for position in normalized:
+        records: list[KeyframeRecord | None] = [None] * len(normalized)
+        pending: list[tuple[int, float, float, Path, Path, float]] = []
+        for index, position in enumerate(normalized):
             stem = _keyframe_stem(scene_id, position, len(normalized))
             source_path = source_dir / f"{stem}.png"
             colored_path = colored_dir / f"{stem}.png"
             time_seconds = min(duration_seconds * position, last_frame_time)
             if reuse_existing and _is_usable_image(source_path) and _is_usable_image(colored_path):
-                records.append(
-                    KeyframeRecord(
-                        scene_id=scene_id,
-                        model=self.model_name,
-                        source_path=str(source_path),
-                        colored_path=str(colored_path),
-                        time_seconds=round(time_seconds, 6),
-                        runtime_seconds=0.0,
-                        scene_relative_position=position,
-                        reused=True,
-                    )
+                records[index] = KeyframeRecord(
+                    scene_id=scene_id,
+                    model=self.model_name,
+                    source_path=str(source_path),
+                    colored_path=str(colored_path),
+                    time_seconds=round(time_seconds, 6),
+                    runtime_seconds=0.0,
+                    scene_relative_position=position,
+                    reused=True,
                 )
                 continue
 
@@ -171,37 +170,65 @@ class KeyframeColorizer:
                 output_path=source_path,
                 time_seconds=time_seconds,
             )
-            if self.model_name == "deoldify":
-                self._colorize_deoldify(source_path=source_path, colored_path=colored_path)
-            else:
-                self._colorize_ddcolor(source_path=source_path, colored_path=colored_path)
-            records.append(
-                KeyframeRecord(
+            pending.append(
+                (
+                    index,
+                    position,
+                    time_seconds,
+                    source_path,
+                    colored_path,
+                    time.perf_counter() - started,
+                )
+            )
+
+        if pending:
+            color_started = time.perf_counter()
+            self._colorize_batch(
+                source_paths=[item[3] for item in pending],
+                colored_paths=[item[4] for item in pending],
+            )
+            color_share = (time.perf_counter() - color_started) / len(pending)
+            for (
+                index,
+                position,
+                time_seconds,
+                source_path,
+                colored_path,
+                extraction_seconds,
+            ) in pending:
+                records[index] = KeyframeRecord(
                     scene_id=scene_id,
                     model=self.model_name,
                     source_path=str(source_path),
                     colored_path=str(colored_path),
                     time_seconds=round(time_seconds, 6),
-                    runtime_seconds=round(time.perf_counter() - started, 6),
+                    runtime_seconds=round(extraction_seconds + color_share, 6),
                     scene_relative_position=position,
                 )
-            )
-        return records
 
-    def _colorize_deoldify(self, *, source_path: Path, colored_path: Path) -> None:
-        if self._deoldify is None:
-            self._deoldify = load_artistic_colorizer_bundle(
-                self.config,
-                weights_path=self.root / DEFAULT_DEOLDIFY_ARTISTIC_WEIGHTS_PATH,
-            )
-        colorize_image_file(
-            model_bundle=self._deoldify,
-            input_path=source_path,
-            output_path=colored_path,
-            render_factor=self.deoldify_render_factor,
-        )
+        return [record for record in records if record is not None]
 
-    def _colorize_ddcolor(self, *, source_path: Path, colored_path: Path) -> None:
+    def _colorize_batch(self, *, source_paths: list[Path], colored_paths: list[Path]) -> None:
+        if self.model_name == "deoldify":
+            if self._deoldify is None:
+                self._deoldify = load_artistic_colorizer_bundle(
+                    self.config,
+                    weights_path=self.root / DEFAULT_DEOLDIFY_ARTISTIC_WEIGHTS_PATH,
+                )
+            source_rgbs = []
+            for source_path in source_paths:
+                source_bgr = _read_image(source_path)
+                source_rgbs.append(cv2.cvtColor(source_bgr, cv2.COLOR_BGR2RGB))
+            outputs = colorize_rgb_batch(
+                model_bundle=self._deoldify,
+                input_rgbs=source_rgbs,
+                render_factor=self.deoldify_render_factor,
+            )
+            for colored_path, output_rgb in zip(colored_paths, outputs, strict=True):
+                colored_path.parent.mkdir(parents=True, exist_ok=True)
+                Image.fromarray(output_rgb).save(colored_path)
+            return
+
         if self._ddcolor is None:
             device = _select_device("auto")
             self._ddcolor = _load_colorizer(
@@ -209,12 +236,10 @@ class KeyframeColorizer:
                 input_size=self.ddcolor_input_size,
                 device=device,
             )
-        source_bgr = cv2.imread(str(source_path), cv2.IMREAD_COLOR)
-        if source_bgr is None:
-            raise ValueError(f"Failed to read extracted keyframe: {source_path}")
-        colored_bgr = self._ddcolor.process(source_bgr)
-        colored_path.parent.mkdir(parents=True, exist_ok=True)
-        Image.fromarray(cv2.cvtColor(colored_bgr, cv2.COLOR_BGR2RGB)).save(colored_path)
+        outputs = self._ddcolor.process_batch([_read_image(path) for path in source_paths])
+        for colored_path, output_bgr in zip(colored_paths, outputs, strict=True):
+            colored_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.fromarray(cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB)).save(colored_path)
 
 
 def keyframe_record_to_dict(record: KeyframeRecord) -> dict[str, str | float | bool]:
@@ -226,3 +251,10 @@ def _is_usable_image(path: Path) -> bool:
         return False
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     return image is not None and image.size > 0
+
+
+def _read_image(path: Path):
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError(f"Failed to read extracted keyframe: {path}")
+    return image

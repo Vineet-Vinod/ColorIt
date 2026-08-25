@@ -14,6 +14,16 @@ runtime:
   cleanup_frames: true
   cleanup_scene_clips: true
 
+deep_remaster:
+  scene_threshold: 0.25
+  precision: float16
+  min_dimension: 192
+  temporal_block_size: 5
+  compile: true
+  dense_max_scores: 32000000
+  source_tile_size: 1024
+  reference_tile_size: 2048
+
 video:
   output_codec: libx264
   crf: 16

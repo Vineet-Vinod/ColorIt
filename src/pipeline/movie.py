@@ -33,6 +33,8 @@ def run_colorize_movie(
     resume: bool,
     limit: int | None,
     overwrite: bool,
+    pipeline: str = "default",
+    coloring_model: str = "deoldify",
 ) -> int:
     paths = resolve_project_paths(config)
     ensure_runtime_directories(paths)
@@ -45,8 +47,22 @@ def run_colorize_movie(
     if output_path.exists() and not overwrite:
         raise FileExistsError(f"Output already exists: {output_path}. Use --overwrite to replace it.")
 
-    threshold = float(scene_threshold if scene_threshold is not None else config.raw["scenes"].get("threshold", 0.60))
-    run_id = _build_run_id(movie_path=movie_path, threshold=threshold)
+    if scene_threshold is not None:
+        threshold = float(scene_threshold)
+    elif pipeline == "deepremaster":
+        threshold = float(config.raw.get("deep_remaster", {}).get("scene_threshold", 0.25))
+    else:
+        threshold = float(config.raw["scenes"].get("threshold", 0.60))
+    if pipeline not in {"default", "deepremaster"}:
+        raise ValueError(f"Unsupported pipeline: {pipeline}")
+    if coloring_model not in {"deoldify", "ddcolor"}:
+        raise ValueError(f"Unsupported coloring model: {coloring_model}")
+    run_id = _build_run_id(
+        movie_path=movie_path,
+        threshold=threshold,
+        pipeline=pipeline,
+        coloring_model=coloring_model,
+    )
     scene_manifest_path = paths.manifest_dir / f"{run_id}.json"
     movie_run_manifest_path = paths.manifest_dir / f"movie_run_{run_id}.json"
 
@@ -54,6 +70,9 @@ def run_colorize_movie(
     print(f"Output: {output_path}")
     print(f"Config: {config_path.resolve()}")
     print(f"Scene threshold: {threshold:.2f}")
+    print(f"Pipeline: {pipeline}")
+    if pipeline == "deepremaster":
+        print(f"Keyframe colorizer: {coloring_model}")
 
     movie_run_manifest = _load_movie_run_manifest(
         movie_run_manifest_path=movie_run_manifest_path,
@@ -63,6 +82,8 @@ def run_colorize_movie(
         threshold=threshold,
         limit=limit,
         resume=resume,
+        pipeline=pipeline,
+        coloring_model=coloring_model,
     )
     _mark_movie_stage(movie_run_manifest, stage="scene_detection", status="running")
     write_json_manifest(movie_run_manifest_path, movie_run_manifest)
@@ -111,6 +132,8 @@ def run_colorize_movie(
             scene_manifest_path=scene_manifest_path,
             resume=resume,
             limit=limit,
+            pipeline=pipeline,
+            coloring_model=coloring_model,
         )
         _mark_movie_stage(
             movie_run_manifest,
@@ -214,11 +237,20 @@ def _is_reusable_video(path: Path) -> bool:
         return False
 
 
-def _build_run_id(*, movie_path: Path, threshold: float) -> str:
+def _build_run_id(
+    *,
+    movie_path: Path,
+    threshold: float,
+    pipeline: str = "default",
+    coloring_model: str = "deoldify",
+) -> str:
     safe_stem = "".join(character if character.isalnum() else "_" for character in movie_path.stem).strip("_")
     location_hash = sha1(str(movie_path).encode("utf-8")).hexdigest()[:8]
     threshold_code = int(round(threshold * 100))
-    return f"{safe_stem}_{location_hash}_t{threshold_code:03d}"
+    base = f"{safe_stem}_{location_hash}_t{threshold_code:03d}"
+    if pipeline == "default":
+        return base
+    return f"{base}_deepremaster_{coloring_model}"
 
 
 def _cleanup_movie_artifacts(*, paths, run_id: str) -> None:
@@ -252,6 +284,8 @@ def _load_movie_run_manifest(
     threshold: float,
     limit: int | None,
     resume: bool,
+    pipeline: str,
+    coloring_model: str,
 ) -> dict[str, Any]:
     if resume:
         payload = load_json_manifest(movie_run_manifest_path, {})
@@ -260,7 +294,16 @@ def _load_movie_run_manifest(
             same_output = payload.get("output_path") == str(output_path)
             same_threshold = payload.get("scene_threshold") == threshold
             same_limit = payload.get("limit") == limit
-            if same_movie and same_output and same_threshold and same_limit:
+            same_pipeline = payload.get("pipeline", "default") == pipeline
+            same_coloring_model = payload.get("coloring_model", "deoldify") == coloring_model
+            if (
+                same_movie
+                and same_output
+                and same_threshold
+                and same_limit
+                and same_pipeline
+                and same_coloring_model
+            ):
                 payload["updated_at"] = utc_now_iso()
                 return payload
 
@@ -272,6 +315,8 @@ def _load_movie_run_manifest(
         "config_path": str(config_path.resolve()),
         "scene_threshold": threshold,
         "limit": limit,
+        "pipeline": pipeline,
+        "coloring_model": coloring_model,
         "status": "running",
         "started_at": now,
         "updated_at": now,

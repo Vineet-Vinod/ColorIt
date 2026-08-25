@@ -22,6 +22,7 @@ DDColor credits adapted research/code from BasicSR, ColorFormer, BigColor, ConvN
 |---|---|---|
 | PyTorch | Tensor execution and model inference | [BSD-style license](https://github.com/pytorch/pytorch/blob/main/LICENSE) |
 | TorchVision | Vision model utilities | [BSD 3-Clause](https://github.com/pytorch/vision/blob/main/LICENSE) |
+| MLX | Apple Silicon tensor execution for the modified DeepRemaster networks | [MIT License](https://github.com/ml-explore/mlx/blob/main/LICENSE) |
 | NumPy | Array operations | [BSD 3-Clause](https://github.com/numpy/numpy/blob/main/LICENSE.txt) |
 | OpenCV / `opencv-python-headless` | Color spaces, CLAHE, and image processing | [Apache License 2.0](https://github.com/opencv/opencv/blob/4.x/LICENSE) and the wheel project's bundled notices |
 | Pillow | Image handling | [HPND License](https://github.com/python-pillow/Pillow/blob/main/LICENSE) |

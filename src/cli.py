@@ -35,6 +35,18 @@ def add_movie_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", default=None, help="Defaults to the input path with '_color' appended.")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--pipeline",
+        choices=("default", "deepremaster"),
+        default="default",
+        help="Use the existing pipeline or DeepRemaster with scene keyframes.",
+    )
+    parser.add_argument(
+        "--coloring-model",
+        choices=("deoldify", "ddcolor"),
+        default="deoldify",
+        help="Image colorizer used for DeepRemaster scene keyframes.",
+    )
 
 
 def handle_download_weights(args: argparse.Namespace) -> int:
@@ -57,6 +69,8 @@ def handle_colorize_movie(args: argparse.Namespace) -> int:
         resume=bool(args.resume),
         limit=None,
         overwrite=bool(args.overwrite),
+        pipeline=str(args.pipeline),
+        coloring_model=str(args.coloring_model),
     )
 
 
@@ -70,6 +84,8 @@ def run_movie(
     resume: bool,
     limit: int | None,
     overwrite: bool,
+    pipeline: str = "default",
+    coloring_model: str = "deoldify",
 ) -> int:
     return run_colorize_movie(
         config=load_config(config_path),
@@ -81,6 +97,8 @@ def run_movie(
         resume=resume,
         limit=limit,
         overwrite=overwrite,
+        pipeline=pipeline,
+        coloring_model=coloring_model,
     )
 
 

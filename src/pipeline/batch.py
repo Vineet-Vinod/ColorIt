@@ -8,6 +8,7 @@ from typing import Any
 from src.pipeline.colorize_clip import run_deoldify_clip
 from src.pipeline.config import AppConfig
 from src.pipeline.ddcolor_clip import DEFAULT_DDCOLOR_WEIGHTS_PATH, run_ddcolor_clip
+from src.pipeline.deepremaster_clip import DeepRemasterRunner, clip_record_to_dict
 from src.pipeline.ffmpeg_utils import (
     FrameSplitSpec,
     encode_scene_mezzanine,
@@ -16,12 +17,14 @@ from src.pipeline.ffmpeg_utils import (
     split_video_by_frame_counts,
 )
 from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
+from src.pipeline.keyframes import KeyframeColorizer, keyframe_record_to_dict
 from src.pipeline.model_chroma_propagate import run_model_chroma_propagate
 from src.pipeline.model_loader import load_colorizer_bundle
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 from src.pipeline.preprocess import equalize_clip_luma_clahe
 from src.pipeline.progress import ProgressBar
 from src.pipeline.scenes import load_scene_manifest
+from src.pipeline.weights import DEFAULT_DEEPREMASTER_WEIGHTS_PATH
 
 
 SCENE_EXTRACTION_VERSION = "scene-frame-split-v1"
@@ -36,6 +39,8 @@ class BatchSceneStatus:
     runtime_seconds: float | None = None
     stage_runtime_seconds: dict[str, float] | None = None
     error: str | None = None
+    keyframe: dict[str, Any] | None = None
+    deepremaster: dict[str, Any] | None = None
 
 
 def run_colorize_batch(
@@ -46,6 +51,8 @@ def run_colorize_batch(
     scene_manifest_path: Path,
     resume: bool,
     limit: int | None,
+    pipeline: str = "default",
+    coloring_model: str = "deoldify",
 ) -> int:
     paths = resolve_project_paths(config)
     ensure_runtime_directories(paths)
@@ -66,12 +73,16 @@ def run_colorize_batch(
     deoldify_output_dir = paths.colorized_dir / "deoldify" / run_id
     ddcolor_output_dir = paths.colorized_dir / "ddcolor" / run_id
     equalized_output_dir = paths.colorized_dir / "clahe" / run_id
+    keyframe_source_dir = paths.colorized_dir / "keyframes" / coloring_model / run_id / "source"
+    keyframe_colored_dir = paths.colorized_dir / "keyframes" / coloring_model / run_id / "colored"
     for directory in (
         scene_output_dir,
         colorized_output_dir,
         deoldify_output_dir,
         ddcolor_output_dir,
         equalized_output_dir,
+        keyframe_source_dir,
+        keyframe_colored_dir,
     ):
         directory.mkdir(parents=True, exist_ok=True)
     cleanup_scene_clips = bool(config.raw.get("runtime", {}).get("cleanup_scene_clips", True))
@@ -86,6 +97,8 @@ def run_colorize_batch(
         scene_count=len(scenes),
         resume=resume,
         limit=limit,
+        pipeline=pipeline,
+        coloring_model=coloring_model,
     )
     batch_payload["status"] = "running"
     batch_payload["updated_at"] = utc_now_iso()
@@ -96,6 +109,12 @@ def run_colorize_batch(
     print(f"Batch scene count: {len(scenes)}")
     print(f"Resume mode: {resume}")
     shared_bundle = None
+    keyframe_colorizer = (
+        KeyframeColorizer(config=config, model=coloring_model, root=paths.root)
+        if pipeline == "deepremaster"
+        else None
+    )
+    deepremaster_runner = None
     scene_mezzanine_path = scene_output_dir / "source_mezzanine.mp4"
     scene_extraction_manifest_path = scene_output_dir / "scene_extraction_manifest.json"
     scene_extraction_current = _scene_extraction_manifest_matches(
@@ -111,6 +130,8 @@ def run_colorize_batch(
             deoldify_output_dir=deoldify_output_dir,
             ddcolor_output_dir=ddcolor_output_dir,
             equalized_output_dir=equalized_output_dir,
+            keyframe_source_dir=keyframe_source_dir,
+            keyframe_colored_dir=keyframe_colored_dir,
             scene_extraction_manifest_path=scene_extraction_manifest_path,
         )
         batch_payload["scene_runs"] = []
@@ -196,6 +217,75 @@ def run_colorize_batch(
                 print(f"Extracted scene clip: {scene_clip_path.name}")
             else:
                 stage_runtimes["scene_extraction"] = 0.0
+
+            if pipeline == "deepremaster":
+                keyframe_path = keyframe_colored_dir / f"{scene_id}.png"
+                keyframe_record = None
+                if resume and keyframe_path.exists() and keyframe_path.stat().st_size > 0:
+                    print(f"Reusing {coloring_model} keyframe: {keyframe_path.name}")
+                    stage_runtimes["keyframe_colorization"] = 0.0
+                else:
+                    stage_started = time.perf_counter()
+                    if keyframe_colorizer is None:
+                        raise RuntimeError("DeepRemaster keyframe colorizer was not initialized")
+                    keyframe_record = keyframe_colorizer.colorize_scene_midpoint(
+                        scene_id=scene_id,
+                        clip_path=scene_clip_path,
+                        source_dir=keyframe_source_dir,
+                        colored_dir=keyframe_colored_dir,
+                    )
+                    stage_runtimes["keyframe_colorization"] = time.perf_counter() - stage_started
+
+                if deepremaster_runner is None:
+                    settings = config.raw.get("deep_remaster", {})
+                    precision = str(settings.get("precision", "float16"))
+                    deepremaster_runner = DeepRemasterRunner(
+                        checkpoint_path=paths.root / DEFAULT_DEEPREMASTER_WEIGHTS_PATH,
+                        converted_weights_path=(
+                            paths.root
+                            / "models/deepremaster"
+                            / f"remasternet.{precision}.mlx.safetensors"
+                        ),
+                        precision=precision,
+                        min_dimension=int(settings.get("min_dimension", 192)),
+                        temporal_block_size=int(settings.get("temporal_block_size", 5)),
+                        compile_model=bool(settings.get("compile", True)),
+                        dense_max_scores=int(settings.get("dense_max_scores", 32_000_000)),
+                        source_tile_size=int(settings.get("source_tile_size", 1024)),
+                        reference_tile_size=int(settings.get("reference_tile_size", 2048)),
+                    )
+                stage_started = time.perf_counter()
+                deepremaster_record = deepremaster_runner.run_clip(
+                    input_path=scene_clip_path,
+                    output_path=colorized_clip_path,
+                    reference_paths=[keyframe_path],
+                    overwrite=True,
+                    progress_label=f"DeepRemaster {coloring_model} {scene_id}",
+                    output_crf=int(config.raw["video"]["crf"]),
+                    output_preset="ultrafast",
+                )
+                stage_runtimes["deepremaster"] = time.perf_counter() - stage_started
+                status = BatchSceneStatus(
+                    scene_id=scene_id,
+                    input_clip=str(scene_clip_path),
+                    output_clip=str(colorized_clip_path),
+                    status="succeeded",
+                    runtime_seconds=time.perf_counter() - started,
+                    stage_runtime_seconds=stage_runtimes,
+                    keyframe=(
+                        keyframe_record_to_dict(keyframe_record)
+                        if keyframe_record is not None
+                        else {"model": coloring_model, "colored_path": str(keyframe_path), "reused": True}
+                    ),
+                    deepremaster=clip_record_to_dict(deepremaster_record),
+                )
+                if cleanup_scene_clips and scene_clip_path.exists():
+                    scene_clip_path.unlink()
+                _upsert_scene_status(batch_payload, status)
+                _refresh_batch_summary(batch_payload, expected_scene_count=len(scenes))
+                write_json_manifest(batch_manifest_path, batch_payload)
+                batch_progress.update(float(scene["duration_seconds"]))
+                continue
 
             if resume and _is_usable_video(equalized_clip_path, reference_path=scene_clip_path):
                 print(f"Reusing CLAHE source clip: {equalized_clip_path.name}")
@@ -451,6 +541,8 @@ def _invalidate_scene_artifacts(
     deoldify_output_dir: Path,
     ddcolor_output_dir: Path,
     equalized_output_dir: Path,
+    keyframe_source_dir: Path,
+    keyframe_colored_dir: Path,
     scene_extraction_manifest_path: Path,
 ) -> None:
     for scene in scenes:
@@ -463,6 +555,10 @@ def _invalidate_scene_artifacts(
             equalized_output_dir,
         ):
             candidate = directory / f"{scene_id}.mp4"
+            if candidate.exists():
+                candidate.unlink()
+        for directory in (keyframe_source_dir, keyframe_colored_dir):
+            candidate = directory / f"{scene_id}.png"
             if candidate.exists():
                 candidate.unlink()
     if scene_extraction_manifest_path.exists():
@@ -502,6 +598,8 @@ def _load_batch_manifest(
     scene_count: int,
     resume: bool,
     limit: int | None,
+    pipeline: str,
+    coloring_model: str,
 ) -> dict[str, Any]:
     if resume:
         payload = load_json_manifest(batch_manifest_path, {})
@@ -511,7 +609,9 @@ def _load_batch_manifest(
             same_movie = payload.get("movie") == str(movie_path)
             same_scene_manifest = payload.get("scene_manifest_path") == str(scene_manifest_path)
             same_limit = payload.get("limit") == limit
-            if same_movie and same_scene_manifest and same_limit:
+            same_pipeline = payload.get("pipeline", "default") == pipeline
+            same_coloring_model = payload.get("coloring_model", "deoldify") == coloring_model
+            if same_movie and same_scene_manifest and same_limit and same_pipeline and same_coloring_model:
                 payload.setdefault("scene_runs", [])
                 payload["scene_count"] = scene_count
                 payload["updated_at"] = utc_now_iso()
@@ -523,6 +623,8 @@ def _load_batch_manifest(
         "scene_manifest_path": str(scene_manifest_path),
         "scene_count": scene_count,
         "limit": limit,
+        "pipeline": pipeline,
+        "coloring_model": coloring_model,
         "status": "pending",
         "succeeded_scene_count": 0,
         "failed_scene_count": 0,

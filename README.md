@@ -51,6 +51,7 @@ The longer-term opportunity is broader than colorization. The same local, AI-ass
 - **Timing safety checks** covering frame count, frame rate, and duration before a run is accepted as complete.
 - **Size-aware delivery** with H.264 compression retries targeting at most `1.5x` the input size by default.
 - **Automatic cleanup** of intermediate clips and manifests after successful runs.
+- **Reference-guided DeepRemaster mode** using one DeOldify Artistic or DDColor keyframe per detected scene and an optimized MLX temporal model.
 
 ## Architecture
 
@@ -73,7 +74,7 @@ Manifests track each long-running stage. With `--resume`, already completed scen
 | Layer | Technology | Role |
 |---|---|---|
 | Language and packaging | Python 3.11, `uv` | Reproducible local installation and CLI |
-| AI runtime | PyTorch, TorchVision | Model loading and inference |
+| AI runtime | PyTorch, TorchVision, MLX | Image colorization and Apple Silicon temporal inference |
 | AI colorization | DeOldify Video, DDColor | Complementary frame color hypotheses |
 | Image processing | OpenCV, NumPy, Pillow | CLAHE, Lab conversion, temporal chroma fusion, frame handling |
 | Video processing | FFmpeg, `ffprobe` | Scene detection, decoding, encoding, audio, assembly, compression |
@@ -108,7 +109,7 @@ Codex accelerated research, implementation, debugging, and documentation; human 
 - [`uv`](https://docs.astral.sh/uv/)
 - `ffmpeg` and `ffprobe` on `PATH`
 - A PyTorch-supported computer
-- Enough free disk space for approximately 1.7 GB of model weights plus temporary video files
+- Enough free disk space for approximately 2.5 GB of model weights plus temporary video files
 
 Apple Silicon MPS is used when available, with CPU fallback. Apple Silicon or a high-end desktop CPU completes movies much faster, but a normal laptop can run the included one-minute demonstration on CPU.
 
@@ -127,7 +128,7 @@ uv sync
 uv run colorit download-weights
 ```
 
-Weights are downloaded to `models/deoldify/ColorizeVideo_gen.pth` and `models/ddcolor/pytorch_model.bin`.
+The command installs the DeOldify Video and Artistic checkpoints, DDColor, and DeepRemaster. Downloads use HTTPS and temporary files. The Artistic and DeepRemaster artifacts must match pinned sizes and SHA-256 checksums before ColorIt accepts them.
 
 ## Reproduce the Demo
 
@@ -168,6 +169,21 @@ uv run colorit colorize-movie \
   --resume \
   --overwrite
 ```
+
+Run reference-guided temporal restoration with DeOldify Artistic keyframes:
+
+```bash
+uv run colorit colorize-movie \
+  --input /path/to/movie.mp4 \
+  --output /path/to/movie_deepremaster_deoldify.mp4 \
+  --pipeline deepremaster \
+  --coloring-model deoldify \
+  --overwrite
+```
+
+Use DDColor keyframes by changing the last option to `--coloring-model ddcolor`. DeepRemaster mode detects scenes, colors each scene midpoint as a reference, restores and propagates color through five-frame temporal blocks, preserves the source frame rate and audio, and uses the normal size-aware final assembly.
+
+The MLX port stores tensors in native channels-last order, folds inference batch normalization into 3D convolutions, caches reference features, compiles the graph, and uses exact tiled online-softmax attention when a dense attention map would be too large. The default runs at a 192-pixel short edge with FP16 weights, then returns frames to the source resolution for encoding. These settings keep inference near real time on the tested M3 Ultra while retaining visibly stronger reference color than the faster 128-pixel setting.
 
 By default, output is written next to the input with `_color` appended. The public CLI intentionally exposes only `download-weights` and `colorize-movie`; internal experimental flags are not part of the launch interface.
 

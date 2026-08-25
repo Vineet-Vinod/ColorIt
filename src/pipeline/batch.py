@@ -279,12 +279,19 @@ def run_colorize_batch(
                         dense_max_scores=int(deepremaster_settings.get("dense_max_scores", 32_000_000)),
                         source_tile_size=int(deepremaster_settings.get("source_tile_size", 1024)),
                         reference_tile_size=int(deepremaster_settings.get("reference_tile_size", 2048)),
+                        restoration_strength=float(deepremaster_settings.get("restoration_strength", 1.0)),
+                        chroma_gain=float(deepremaster_settings.get("chroma_gain", 1.0)),
+                        target_chroma_ratio=_optional_positive_float(
+                            deepremaster_settings.get("target_chroma_ratio")
+                        ),
+                        max_chroma_gain=float(deepremaster_settings.get("max_chroma_gain", 2.5)),
                     )
                 stage_started = time.perf_counter()
                 deepremaster_record = deepremaster_runner.run_clip(
                     input_path=scene_clip_path,
                     output_path=colorized_clip_path,
                     reference_paths=keyframe_paths,
+                    reference_times_seconds=[record.time_seconds for record in keyframe_records],
                     overwrite=True,
                     progress_label=f"DeepRemaster {coloring_model} {scene_id}",
                     output_crf=int(config.raw["video"]["crf"]),
@@ -723,6 +730,16 @@ def _sum_stage_runtimes(runs: list[dict[str, Any]]) -> dict[str, float]:
         for stage_name, runtime_seconds in stage_runtimes.items():
             totals[stage_name] = totals.get(stage_name, 0.0) + float(runtime_seconds)
     return {stage_name: round(runtime_seconds, 3) for stage_name, runtime_seconds in totals.items()}
+
+
+def _optional_positive_float(value: object) -> float | None:
+    """Normalize a nullable config setting before constructing the MLX runner."""
+    if value is None:
+        return None
+    result = float(value)
+    if result <= 0.0:
+        raise ValueError("DeepRemaster target_chroma_ratio must be positive when configured")
+    return result
 
 
 def _recorded_keyframe_paths(status: dict[str, Any]) -> list[str]:

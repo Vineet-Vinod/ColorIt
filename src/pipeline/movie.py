@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha1
+import json
 import math
 from pathlib import Path
 import shutil
@@ -62,6 +63,7 @@ def run_colorize_movie(
         threshold=threshold,
         pipeline=pipeline,
         coloring_model=coloring_model,
+        deepremaster_settings=config.raw.get("deep_remaster", {}),
     )
     scene_manifest_path = paths.manifest_dir / f"{run_id}.json"
     movie_run_manifest_path = paths.manifest_dir / f"movie_run_{run_id}.json"
@@ -243,6 +245,7 @@ def _build_run_id(
     threshold: float,
     pipeline: str = "default",
     coloring_model: str = "deoldify",
+    deepremaster_settings: dict[str, Any] | None = None,
 ) -> str:
     safe_stem = "".join(character if character.isalnum() else "_" for character in movie_path.stem).strip("_")
     location_hash = sha1(str(movie_path).encode("utf-8")).hexdigest()[:8]
@@ -250,7 +253,13 @@ def _build_run_id(
     base = f"{safe_stem}_{location_hash}_t{threshold_code:03d}"
     if pipeline == "default":
         return base
-    return f"{base}_deepremaster_{coloring_model}"
+    settings_payload = json.dumps(
+        deepremaster_settings or {},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    settings_hash = sha1(settings_payload.encode("utf-8")).hexdigest()[:8]
+    return f"{base}_deepremaster_{coloring_model}_q{settings_hash}"
 
 
 def _cleanup_movie_artifacts(*, paths, run_id: str) -> None:
@@ -260,6 +269,8 @@ def _cleanup_movie_artifacts(*, paths, run_id: str) -> None:
         paths.colorized_dir / "clahe" / run_id,
         paths.colorized_dir / "deoldify" / run_id,
         paths.colorized_dir / "ddcolor" / run_id,
+        paths.colorized_dir / "keyframes" / "deoldify" / run_id,
+        paths.colorized_dir / "keyframes" / "ddcolor" / run_id,
         paths.final_dir / f"{run_id}_assembly_work.mp4",
         paths.manifest_dir / f"{run_id}.json",
         paths.manifest_dir / f"movie_run_{run_id}.json",

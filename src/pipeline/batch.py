@@ -298,8 +298,17 @@ def run_colorize_batch(
                     reference_times_seconds=[record.time_seconds for record in keyframe_records],
                     overwrite=True,
                     progress_label=f"DeepRemaster {coloring_model} {scene_id}",
-                    output_crf=int(config.raw["video"]["crf"]),
-                    output_preset="ultrafast",
+                    output_crf=int(
+                        deepremaster_settings.get("intermediate_crf", config.raw["video"]["crf"])
+                    ),
+                    output_preset=str(
+                        deepremaster_settings.get("intermediate_preset", "ultrafast")
+                    ),
+                    output_pixel_format=str(
+                        deepremaster_settings.get(
+                            "intermediate_pixel_format", config.raw["video"]["pixel_format"]
+                        )
+                    ),
                 )
                 stage_runtimes["deepremaster"] = time.perf_counter() - stage_started
                 status = BatchSceneStatus(

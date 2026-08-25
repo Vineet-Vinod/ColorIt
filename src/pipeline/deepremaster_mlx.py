@@ -243,16 +243,42 @@ class SourceReferenceAttention(_Module):
 
         return mx.concatenate(outputs, axis=1)
 
-    def __call__(self, source: Any, reference: Any) -> Any:
-        _require_volume("source", source, self.query.weight.shape[-1])
+    def project_reference(self, reference: Any) -> tuple[Any, Any]:
+        """Project a reference volume to reusable key/value token arrays."""
+
         _require_volume("reference", reference, self.key.weight.shape[-1])
-        if source.shape[0] != reference.shape[0]:
+        return (
+            self._to_tokens(self.key(reference)),
+            self._to_tokens(self.value(reference)),
+        )
+
+    def __call__(
+        self,
+        source: Any,
+        reference: Any | None = None,
+        *,
+        projected_reference: tuple[Any, Any] | None = None,
+    ) -> Any:
+        _require_volume("source", source, self.query.weight.shape[-1])
+        if (reference is None) == (projected_reference is None):
+            raise ValueError("Pass exactly one of reference or projected_reference")
+        if projected_reference is None:
+            key, value = self.project_reference(reference)
+        else:
+            key, value = projected_reference
+            if key.ndim != 3 or value.ndim != 3:
+                raise ValueError("Projected attention references must have N,R,C shape")
+            if key.shape[:2] != value.shape[:2]:
+                raise ValueError("Projected attention key/value positions must match")
+            if key.shape[-1] != self.query.weight.shape[0]:
+                raise ValueError("Projected attention key channels do not match the query")
+            if value.shape[-1] != source.shape[-1]:
+                raise ValueError("Projected attention value channels do not match the source")
+        if source.shape[0] != key.shape[0]:
             raise ValueError("Source and reference attention batches must match")
 
         source_shape = source.shape
         query = self._to_tokens(self.query(source))
-        key = self._to_tokens(self.key(reference))
-        value = self._to_tokens(self.value(reference))
         score_count = query.shape[0] * query.shape[1] * key.shape[1]
         if score_count <= self.dense_max_scores:
             attended = self._dense(query, key, value)
@@ -297,10 +323,14 @@ class DeepRemasterRestoration(_Module):
 
 @dataclass(frozen=True)
 class ReferenceFeatures:
-    """Reference encoder outputs, reusable for every source five-frame block."""
+    """Reference encoder outputs and attention projections reusable per clip."""
 
     level8: Any
     level16: Any
+    level8_key: Any | None = None
+    level8_value: Any | None = None
+    level16_key: Any | None = None
+    level16_value: Any | None = None
 
 
 class DeepRemasterColorization(_Module):
@@ -370,7 +400,16 @@ class DeepRemasterColorization(_Module):
         references = references.astype(self.reffeatnet1[0].conv.weight.dtype)
         level8 = self._run(self.reffeatnet1, references - _REFERENCE_MEAN)
         level16 = self._run(self.reffeatnet2, level8)
-        return ReferenceFeatures(level8=level8, level16=level16)
+        level8_key, level8_value = self.stattn1.project_reference(level8)
+        level16_key, level16_value = self.stattn2.project_reference(level16)
+        return ReferenceFeatures(
+            level8=level8,
+            level16=level16,
+            level8_key=level8_key,
+            level8_value=level8_value,
+            level16_key=level16_key,
+            level16_value=level16_value,
+        )
 
     def __call__(
         self,
@@ -390,11 +429,29 @@ class DeepRemasterColorization(_Module):
 
         x1 = self._run(self.down1, luma - _LUMA_MEAN)
         if reference_features is not None:
-            x1 = self.stattn1(x1, reference_features.level8)
+            if reference_features.level8_key is None or reference_features.level8_value is None:
+                x1 = self.stattn1(x1, reference_features.level8)
+            else:
+                x1 = self.stattn1(
+                    x1,
+                    projected_reference=(
+                        reference_features.level8_key,
+                        reference_features.level8_value,
+                    ),
+                )
         x2 = self._run(self.flat, x1)
         out = self._run(self.down2, x1)
         if reference_features is not None:
-            out = self.stattn2(out, reference_features.level16)
+            if reference_features.level16_key is None or reference_features.level16_value is None:
+                out = self.stattn2(out, reference_features.level16)
+            else:
+                out = self.stattn2(
+                    out,
+                    projected_reference=(
+                        reference_features.level16_key,
+                        reference_features.level16_value,
+                    ),
+                )
         out = self.conv1(out)
         out = self.selfattn1(out, out)
         out = self.up1(out, x2)

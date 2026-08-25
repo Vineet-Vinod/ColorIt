@@ -99,10 +99,26 @@ class DeepRemasterRunner:
         if compile_model:
             self._compiled_forward = mx.compile(self._forward_with_features)
 
-    def _forward_with_features(self, luma, level8, level16):
+    def _forward_with_features(
+        self,
+        luma,
+        level8,
+        level16,
+        level8_key,
+        level8_value,
+        level16_key,
+        level16_value,
+    ):
         return self.model(
             luma,
-            reference_features=ReferenceFeatures(level8=level8, level16=level16),
+            reference_features=ReferenceFeatures(
+                level8=level8,
+                level16=level16,
+                level8_key=level8_key,
+                level8_value=level8_value,
+                level16_key=level16_key,
+                level16_value=level16_value,
+            ),
         )
 
     def run_clip(
@@ -141,7 +157,14 @@ class DeepRemasterRunner:
             min_dimension=self.reference_min_dimension,
         )
         reference_features = self.model.prepare_references(reference_tensor)
-        mx.eval(reference_features.level8, reference_features.level16)
+        mx.eval(
+            reference_features.level8,
+            reference_features.level16,
+            reference_features.level8_key,
+            reference_features.level8_value,
+            reference_features.level16_key,
+            reference_features.level16_value,
+        )
 
         reader = open_rawvideo_reader(input_path=input_path)
         writer = open_rawvideo_writer(
@@ -200,6 +223,10 @@ class DeepRemasterRunner:
                             luma,
                             reference_features.level8,
                             reference_features.level16,
+                            reference_features.level8_key,
+                            reference_features.level8_value,
+                            reference_features.level16_key,
+                            reference_features.level16_value,
                         )
                     mx.eval(restored, ab)
                     inference_seconds += time.perf_counter() - block_started

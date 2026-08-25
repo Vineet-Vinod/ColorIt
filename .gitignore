@@ -11,6 +11,7 @@ tmp/
 # Model weights and generated media
 models/deoldify/*.pth
 models/ddcolor/*
+models/deepremaster/*
 data/colorized/
 data/final/
 data/frames/
@@ -22,3 +23,4 @@ data/eval/
 !data/**/.gitkeep
 !models/deoldify/.gitkeep
 !models/ddcolor/.gitkeep
+!models/deepremaster/.gitkeep

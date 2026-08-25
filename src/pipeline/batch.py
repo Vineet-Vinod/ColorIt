@@ -274,6 +274,9 @@ def run_colorize_batch(
                         ),
                         precision=precision,
                         min_dimension=int(deepremaster_settings.get("min_dimension", 192)),
+                        reference_min_dimension=int(
+                            deepremaster_settings.get("reference_min_dimension", 256)
+                        ),
                         temporal_block_size=int(deepremaster_settings.get("temporal_block_size", 5)),
                         compile_model=bool(deepremaster_settings.get("compile", True)),
                         dense_max_scores=int(deepremaster_settings.get("dense_max_scores", 32_000_000)),
@@ -285,6 +288,7 @@ def run_colorize_batch(
                             deepremaster_settings.get("target_chroma_ratio")
                         ),
                         max_chroma_gain=float(deepremaster_settings.get("max_chroma_gain", 2.5)),
+                        lab_backend=str(deepremaster_settings.get("lab_backend", "opencv")),
                     )
                 stage_started = time.perf_counter()
                 deepremaster_record = deepremaster_runner.run_clip(

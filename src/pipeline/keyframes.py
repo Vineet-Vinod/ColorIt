@@ -90,6 +90,15 @@ class KeyframeColorizer:
         self.config = config
         self.model_name = model
         self.root = root
+        settings = config.raw.get("deep_remaster", {})
+        self.deoldify_render_factor = int(settings.get("deoldify_render_factor", 35))
+        self.ddcolor_input_size = int(settings.get("ddcolor_input_size", 256))
+        if self.deoldify_render_factor < 1:
+            raise ValueError("DeepRemaster DeOldify render factor must be positive")
+        if self.ddcolor_input_size < 64 or self.ddcolor_input_size % 16:
+            raise ValueError(
+                "DeepRemaster DDColor input size must be at least 64 and divisible by 16"
+            )
         self._deoldify: ModelBundle | None = None
         self._ddcolor = None
 
@@ -189,7 +198,7 @@ class KeyframeColorizer:
             model_bundle=self._deoldify,
             input_path=source_path,
             output_path=colored_path,
-            render_factor=35,
+            render_factor=self.deoldify_render_factor,
         )
 
     def _colorize_ddcolor(self, *, source_path: Path, colored_path: Path) -> None:
@@ -197,7 +206,7 @@ class KeyframeColorizer:
             device = _select_device("auto")
             self._ddcolor = _load_colorizer(
                 weights_path=self.root / DEFAULT_DDCOLOR_WEIGHTS_PATH,
-                input_size=256,
+                input_size=self.ddcolor_input_size,
                 device=device,
             )
         source_bgr = cv2.imread(str(source_path), cv2.IMREAD_COLOR)

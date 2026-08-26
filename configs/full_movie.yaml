@@ -18,6 +18,7 @@ deep_remaster:
   scene_threshold: 0.25
   keyframe_positions: [0.2, 0.5, 0.8]
   deoldify_render_factor: 45
+  deoldify_stable_render_factor: 35
   ddcolor_input_size: 512
   precision: float16
   min_dimension: 384

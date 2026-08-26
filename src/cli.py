@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 
 from src.pipeline.config import load_config
+from src.pipeline.keyframes import KEYFRAME_COLORING_MODELS
 from src.pipeline.movie import run_colorize_movie
 from src.pipeline.weights import run_download_weights
 
@@ -48,9 +49,12 @@ def add_movie_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--coloring-model",
-        choices=("deoldify", "ddcolor"),
+        choices=KEYFRAME_COLORING_MODELS,
         default="deoldify",
-        help="Image colorizer used for DeepRemaster scene keyframes.",
+        help=(
+            "Image colorizer used for DeepRemaster scene keyframes. "
+            "The short names select DeOldify Artistic and DDColor ModelScope."
+        ),
     )
 
 

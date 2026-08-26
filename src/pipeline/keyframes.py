@@ -13,10 +13,24 @@ from src.pipeline.config import AppConfig
 from src.pipeline.ddcolor_clip import _load_colorizer, _select_device
 from src.pipeline.ffmpeg_utils import extract_single_frame, ffprobe_media
 from src.pipeline.inference import colorize_rgb_batch
-from src.pipeline.model_loader import ModelBundle, load_artistic_colorizer_bundle
+from src.pipeline.model_loader import (
+    ModelBundle,
+    load_artistic_colorizer_bundle,
+    load_stable_colorizer_bundle,
+)
 from src.pipeline.weights import (
+    DEFAULT_DDCOLOR_ARTISTIC_WEIGHTS_PATH,
     DEFAULT_DDCOLOR_WEIGHTS_PATH,
     DEFAULT_DEOLDIFY_ARTISTIC_WEIGHTS_PATH,
+    DEFAULT_DEOLDIFY_STABLE_WEIGHTS_PATH,
+)
+
+
+KEYFRAME_COLORING_MODELS = (
+    "deoldify",
+    "deoldify_stable",
+    "ddcolor",
+    "ddcolor_artistic",
 )
 
 
@@ -85,13 +99,18 @@ class KeyframeColorizer:
     """Reuse one image model while producing scene references."""
 
     def __init__(self, *, config: AppConfig, model: str, root: Path):
-        if model not in {"deoldify", "ddcolor"}:
+        if model not in KEYFRAME_COLORING_MODELS:
             raise ValueError(f"Unsupported keyframe colorizer: {model}")
         self.config = config
         self.model_name = model
         self.root = root
         settings = config.raw.get("deep_remaster", {})
-        self.deoldify_render_factor = int(settings.get("deoldify_render_factor", 35))
+        render_factor_key = (
+            "deoldify_stable_render_factor"
+            if model == "deoldify_stable"
+            else "deoldify_render_factor"
+        )
+        self.deoldify_render_factor = int(settings.get(render_factor_key, 35))
         self.ddcolor_input_size = int(settings.get("ddcolor_input_size", 256))
         if self.deoldify_render_factor < 1:
             raise ValueError("DeepRemaster DeOldify render factor must be positive")
@@ -209,12 +228,18 @@ class KeyframeColorizer:
         return [record for record in records if record is not None]
 
     def _colorize_batch(self, *, source_paths: list[Path], colored_paths: list[Path]) -> None:
-        if self.model_name == "deoldify":
+        if self.model_name in {"deoldify", "deoldify_stable"}:
             if self._deoldify is None:
-                self._deoldify = load_artistic_colorizer_bundle(
-                    self.config,
-                    weights_path=self.root / DEFAULT_DEOLDIFY_ARTISTIC_WEIGHTS_PATH,
-                )
+                if self.model_name == "deoldify_stable":
+                    self._deoldify = load_stable_colorizer_bundle(
+                        self.config,
+                        weights_path=self.root / DEFAULT_DEOLDIFY_STABLE_WEIGHTS_PATH,
+                    )
+                else:
+                    self._deoldify = load_artistic_colorizer_bundle(
+                        self.config,
+                        weights_path=self.root / DEFAULT_DEOLDIFY_ARTISTIC_WEIGHTS_PATH,
+                    )
             source_rgbs = []
             for source_path in source_paths:
                 source_bgr = _read_image(source_path)
@@ -231,8 +256,13 @@ class KeyframeColorizer:
 
         if self._ddcolor is None:
             device = _select_device("auto")
+            weights_path = (
+                DEFAULT_DDCOLOR_ARTISTIC_WEIGHTS_PATH
+                if self.model_name == "ddcolor_artistic"
+                else DEFAULT_DDCOLOR_WEIGHTS_PATH
+            )
             self._ddcolor = _load_colorizer(
-                weights_path=self.root / DEFAULT_DDCOLOR_WEIGHTS_PATH,
+                weights_path=self.root / weights_path,
                 input_size=self.ddcolor_input_size,
                 device=device,
             )

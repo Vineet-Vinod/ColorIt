@@ -71,6 +71,20 @@ def load_artistic_colorizer_bundle(
     return ModelBundle(model=model, device=device, backend=backend)
 
 
+def load_stable_colorizer_bundle(
+    config: AppConfig,
+    *,
+    weights_path,
+) -> ModelBundle:
+    device, backend = select_device(config)
+    model = DeoldifyVideoModel()
+    checkpoint = _load_checkpoint(weights_path)
+    model.load_state_dict(checkpoint["model"], strict=True)
+    model.to(device)
+    model.eval()
+    return ModelBundle(model=model, device=device, backend=backend)
+
+
 def _load_checkpoint(weights_path):
     with torch.serialization.safe_globals([slice]):
         checkpoint = torch.load(weights_path, map_location="cpu", weights_only=True)

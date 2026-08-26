@@ -51,7 +51,7 @@ The longer-term opportunity is broader than colorization. The same local, AI-ass
 - **Timing safety checks** covering frame count, frame rate, and duration before a run is accepted as complete.
 - **Size-aware delivery** with H.264 compression retries targeting at most `2x` the input size by default.
 - **Automatic cleanup** of intermediate clips and manifests after successful runs.
-- **Reference-guided DeepRemaster mode** using three scene-relative DeOldify Artistic or DDColor keyframes per detected scene and an optimized MLX temporal model.
+- **Reference-guided DeepRemaster mode** using three scene-relative DDColor or DeOldify keyframes per detected scene and an optimized MLX temporal model.
 
 ## Architecture
 
@@ -170,18 +170,20 @@ uv run colorit colorize-movie \
   --overwrite
 ```
 
-Run reference-guided temporal restoration with DeOldify Artistic keyframes:
+Run reference-guided temporal restoration with vivid DDColor ModelScope keyframes:
 
 ```bash
 uv run colorit colorize-movie \
   --input /path/to/movie.mp4 \
-  --output /path/to/movie_deepremaster_deoldify.mp4 \
+  --output /path/to/movie_deepremaster_ddcolor.mp4 \
   --pipeline deepremaster \
-  --coloring-model deoldify \
+  --coloring-model ddcolor \
   --overwrite
 ```
 
-Use DDColor keyframes by changing the last option to `--coloring-model ddcolor`. DeepRemaster mode detects scenes, colors references at 20%, 50%, and 80% of every scene by default, then restores and propagates color through five-frame temporal blocks. This gives the model multiple costume and lighting views without crossing scene boundaries. Set `deep_remaster.keyframe_positions` in the config to another non-empty list of positions from `0.0` through `1.0`; a one-item list keeps the original single-reference artifact naming and behavior. Add `--keep-intermediates` to preserve every source and colored keyframe for inspection. The mode preserves the source frame rate and audio and uses the normal size-aware final assembly.
+The keyframe choices are `ddcolor` for the vivid ModelScope checkpoint, `ddcolor_artistic` for fewer aggressive color blocks, `deoldify` for DeOldify Artistic, and `deoldify_stable` for its lower-artifact portrait and landscape model. A four-scene screen found that DeOldify Stable reduced DeepRemaster reference color error by 39% and adjacent-frame Lab chroma change by 36% relative to DDColor ModelScope, while DDColor ModelScope retained stronger costume colors. The choice is exposed because neither result dominates the other visually.
+
+DeepRemaster mode detects scenes, colors references at 20%, 50%, and 80% of every scene by default, then restores and propagates color through five-frame temporal blocks. This gives the model multiple costume and lighting views without crossing scene boundaries. Set `deep_remaster.keyframe_positions` in the config to another non-empty list of positions from `0.0` through `1.0`; a one-item list keeps the original single-reference artifact naming and behavior. Add `--keep-intermediates` to preserve every source and colored keyframe for inspection. The mode preserves the source frame rate and audio and uses the normal size-aware final assembly.
 
 The MLX port stores tensors in native channels-last order, folds inference batch normalization into 3D convolutions, caches reference encodings plus key/value projections, compiles the graph, and uses exact tiled online-softmax attention when a dense attention map would be too large. The quality-tested default uses FP16, a 384-pixel short edge for both source and references, DDColor input size 512, DeOldify render factor 45, and the released model's five-frame temporal blocks. A short calibration pass measures raw output chroma at the three reference times and applies a bounded per-scene gain to target 95% of reference chroma. This avoids the severe scene-dependent washout produced by one fixed gain. High-quality 4:4:4 scene intermediates are concatenated without an unnecessary normalization encode, followed by one 4:2:0 delivery encode.
 

@@ -149,6 +149,7 @@ class Flux2KleinMLXColorizer:
         self,
         *,
         source_image: Path,
+        reference_images: list[Path] | None = None,
         prompt: str,
         seed: int,
         width: int,
@@ -162,6 +163,10 @@ class Flux2KleinMLXColorizer:
         source = source_image.expanduser().resolve()
         if not source.is_file():
             raise FileNotFoundError(f"Source image not found: {source}")
+        references = [path.expanduser().resolve() for path in (reference_images or [])]
+        for reference in references:
+            if not reference.is_file():
+                raise FileNotFoundError(f"Reference image not found: {reference}")
 
         generated = self._get_model().generate_image(
             seed=seed,
@@ -170,7 +175,7 @@ class Flux2KleinMLXColorizer:
             width=width,
             height=height,
             guidance=self.options.guidance,
-            image_paths=[source],
+            image_paths=[source, *references],
             scheduler="flow_match_euler_discrete",
             use_kv_cache=self.options.use_kv_cache,
         )

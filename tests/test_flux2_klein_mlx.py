@@ -44,6 +44,7 @@ def test_generate_reuses_model_and_passes_fast_defaults(tmp_path: Path, monkeypa
     colorizer.warmup()
     result = colorizer.generate(
         source_image=source,
+        reference_images=[source],
         prompt="Color this black and white film still naturally.",
         seed=7,
         width=64,
@@ -60,7 +61,7 @@ def test_generate_reuses_model_and_passes_fast_defaults(tmp_path: Path, monkeypa
             "width": 64,
             "height": 64,
             "guidance": 1.0,
-            "image_paths": [source.resolve()],
+            "image_paths": [source.resolve(), source.resolve()],
             "scheduler": "flow_match_euler_discrete",
             "use_kv_cache": False,
         }

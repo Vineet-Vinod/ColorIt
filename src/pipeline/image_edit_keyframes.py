@@ -11,8 +11,6 @@ from PIL import Image
 
 IMAGE_EDIT_KEYFRAME_MODELS = (
     "flux2_klein_4b",
-    "qwen_image_edit_2511",
-    "firered_image_edit_1_1",
 )
 
 DEFAULT_COLORIZE_PROMPT = (

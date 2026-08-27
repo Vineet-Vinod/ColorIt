@@ -12,6 +12,7 @@ tmp/
 models/deoldify/*.pth
 models/ddcolor/*
 models/deepremaster/*
+models/image-edit/*
 data/colorized/
 data/final/
 data/frames/
@@ -24,3 +25,4 @@ data/eval/
 !models/deoldify/.gitkeep
 !models/ddcolor/.gitkeep
 !models/deepremaster/.gitkeep
+!models/image-edit/.gitkeep

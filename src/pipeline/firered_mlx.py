@@ -25,7 +25,7 @@ FIRERED_LICENSE = "apache-2.0"
 FIRERED_WEIGHT_SHA256 = {
     "text_encoder/model-00001-of-00004.safetensors": "d725335e4ea2399be706469e4b8807716a8fa64bd03468252e9f7acf2415fee4",
     "text_encoder/model-00002-of-00004.safetensors": "b1830db6908dcc76df3a71492acbcf2b8cac130114cf1f3c2d9edae8de8c6de3",
-    "text_encoder/model-00003-of-00004.safetensors": "09c1807c6d00d7cab94f7db39d4c02ebb8537225ccde383861ac48db97945aa6c",
+    "text_encoder/model-00003-of-00004.safetensors": "09c1807c6d00d7cab94f7db39d4c02ebb8537225ccde383861ac48db97945aa6",
     "text_encoder/model-00004-of-00004.safetensors": "5dd068336d14d45ffb43cef374d286cc6ba9d8741b028f90a7d040d847961f4a",
     "transformer/diffusion_pytorch_model-00001-of-00005.safetensors": "cd6f0d78a3a8c21792538d0abae604bd7abbca1508a2e8c778ea359f5fabd180",
     "transformer/diffusion_pytorch_model-00002-of-00005.safetensors": "bb6b283ea5954aa16e8df94fbbd37368c48c07ff3cfcf3a514117333c3753463",

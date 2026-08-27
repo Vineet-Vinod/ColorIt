@@ -27,7 +27,13 @@ def build_parser() -> argparse.ArgumentParser:
     download_parser.add_argument(
         "--image-edit-model",
         action="append",
-        choices=tuple(sorted(IMAGE_EDIT_MODELS)),
+        choices=tuple(
+            sorted(
+                name
+                for name, model in IMAGE_EDIT_MODELS.items()
+                if model.automatic_download
+            )
+        ),
         default=[],
         help="Also download one verified MLX image-edit checkpoint. Repeat to select more than one.",
     )

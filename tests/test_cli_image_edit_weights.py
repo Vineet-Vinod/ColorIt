@@ -26,3 +26,10 @@ def test_download_weights_rejects_unknown_image_edit_model() -> None:
         build_parser().parse_args(
             ["download-weights", "--image-edit-model", "untrusted/model"]
         )
+
+
+def test_download_weights_does_not_offer_unverifiable_control_color() -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            ["download-weights", "--image-edit-model", "control_color"]
+        )

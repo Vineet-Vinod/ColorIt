@@ -180,6 +180,7 @@ class MfluxMinimalParityTest(unittest.TestCase):
         from types import SimpleNamespace
         from mflux.models.qwen.model.qwen_transformer.qwen_transformer import QwenTransformer
 
+        mx.random.seed(7)
         transformer = QwenTransformer(
             num_layers=1,
             num_attention_heads=1,

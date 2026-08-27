@@ -142,6 +142,10 @@ class QwenImageEditRunner:
         _require_mflux()
         if not self.config.model_dir.is_dir():
             raise QwenMlxError(f"model directory is missing: {self.config.model_dir}")
+        # Safetensors avoid pickle execution, but an immutable revision alone
+        # does not prove the local files still match it. Verify the complete
+        # allowlist before MFLUX opens any shard.
+        validate_official_weights(self.config.model_dir)
         import mlx.core as mx
         from mflux.models.common.config import ModelConfig
         from mflux.models.qwen.variants.edit.qwen_image_edit import QwenImageEdit

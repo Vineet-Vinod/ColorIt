@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from src.pipeline.image_edit_weights import IMAGE_EDIT_MODELS, verify_model_snapshot
+
 
 FIRERED_REPO_ID = "FireRedTeam/FireRed-Image-Edit-1.1"
 FIRERED_REVISION = "3bc3f2a12722fd9883eb6357500de191d56baaf5"
@@ -165,6 +167,10 @@ def create_firered_mlx(
     """
 
     checkpoint = validate_firered_checkpoint(model_path)
+    try:
+        verify_model_snapshot(IMAGE_EDIT_MODELS["firered_image_edit_1_1"], checkpoint.path)
+    except ValueError as exc:
+        raise FireRedCheckpointError(str(exc)) from exc
     try:
         from mflux.models.common.config.model_config import ModelConfig
         from mflux.models.qwen.variants.edit.qwen_image_edit import QwenImageEdit

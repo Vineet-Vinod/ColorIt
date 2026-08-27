@@ -329,6 +329,8 @@ class QwenCompiledEditLoop:
     def denoise_latents(self, prepared: PreparedQwenEdit, latents):
         """Denoise supplied fixed-shape latents. Useful for parity tests."""
 
+        import mlx.core as mx
+
         if latents.shape[0] != prepared.batch_size:
             raise ValueError("latent batch size must match prepared conditioning")
         scheduler = prepared.config.scheduler
@@ -336,6 +338,10 @@ class QwenCompiledEditLoop:
             timestep = scheduler.timesteps[index]
             noise = prepared.cfg.predict_noise(latents, timestep)
             latents = scheduler.step(noise=noise, timestep=index, latents=latents)
+            # MLX is lazy. Materialize every scheduler state before the next
+            # transformer call instead of retaining a full multi-step graph
+            # and all of its activations until VAE decode.
+            mx.eval(latents)
         return latents
 
     @staticmethod

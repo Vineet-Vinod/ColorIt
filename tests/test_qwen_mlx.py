@@ -141,6 +141,7 @@ class CompiledQwenCFGTest(unittest.TestCase):
 class _SyntheticScheduler:
     def __init__(self):
         self.timesteps = [mx.array(1.0), mx.array(2.0)]
+        self.sigmas = [mx.array(0.25), mx.array(0.5)]
 
     @staticmethod
     def step(*, noise, timestep, latents):
@@ -156,7 +157,7 @@ class CompiledDenoiseParityTest(unittest.TestCase):
         actual = QwenCompiledEditLoop(model=object()).denoise_latents(prepared, initial)
 
         eager = initial
-        for index, timestep in enumerate(config.scheduler.timesteps):
+        for index, timestep in enumerate(config.scheduler.sigmas):
             positive = eager + 2.0 + timestep
             negative = eager - 1.0 + timestep
             noise = CompiledQwenCFG._guided_noise(positive, negative, 1.0)

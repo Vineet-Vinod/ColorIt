@@ -335,7 +335,11 @@ class QwenCompiledEditLoop:
             raise ValueError("latent batch size must match prepared conditioning")
         scheduler = prepared.config.scheduler
         for index in range(prepared.config.num_inference_steps):
-            timestep = scheduler.timesteps[index]
+            # MFLUX's eager transformer receives the integer loop index and
+            # converts it to scheduler.sigmas[index]. Passing the public
+            # integer-valued `timesteps` array here over-scales conditioning
+            # by roughly 1000x and decodes as colored noise.
+            timestep = scheduler.sigmas[index]
             noise = prepared.cfg.predict_noise(latents, timestep)
             latents = scheduler.step(noise=noise, timestep=index, latents=latents)
             # MLX is lazy. Materialize every scheduler state before the next

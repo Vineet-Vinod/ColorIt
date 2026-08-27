@@ -8,6 +8,7 @@ from .adapter import (
     download_official_weights,
     smoke_check,
 )
+from .optimized import CompiledQwenCFG, QwenCompiledEditLoop, benchmark_fixed_shape
 
 __all__ = [
     "MFLUX_VERSION",
@@ -16,4 +17,7 @@ __all__ = [
     "QwenImageEditRunner",
     "download_official_weights",
     "smoke_check",
+    "CompiledQwenCFG",
+    "QwenCompiledEditLoop",
+    "benchmark_fixed_shape",
 ]

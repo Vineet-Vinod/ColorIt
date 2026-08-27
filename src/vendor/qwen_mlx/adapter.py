@@ -56,6 +56,8 @@ class QwenEditConfig:
     height: int | None = None
     mlx_cache_limit_gb: int | None = None
     scheduler: str = "linear"
+    cfg_mode: str = "auto"
+    fused_cfg_max_batch: int = 1
 
     def __post_init__(self) -> None:
         if self.quantize not in {None, 3, 4, 5, 6, 8}:
@@ -68,6 +70,10 @@ class QwenEditConfig:
             raise ValueError("guidance must be non-negative")
         if self.mlx_cache_limit_gb is not None and self.mlx_cache_limit_gb < 1:
             raise ValueError("mlx_cache_limit_gb must be at least 1")
+        if self.cfg_mode not in {"auto", "fused", "separate"}:
+            raise ValueError("cfg_mode must be auto, fused, or separate")
+        if self.fused_cfg_max_batch < 1:
+            raise ValueError("fused_cfg_max_batch must be positive")
         for name, value in (("width", self.width), ("height", self.height)):
             if value is not None and (value < 16 or value % 16):
                 raise ValueError(f"{name} must be a multiple of 16 and at least 16")
@@ -77,8 +83,8 @@ class QwenEditConfig:
         result["model_dir"] = str(self.model_dir)
         result["model"] = QWEN_IMAGE_EDIT_2511
         result["mflux_version"] = MFLUX_VERSION
-        result["compile"] = False
-        result["compile_note"] = "mflux 0.19.1 does not compile Qwen Image Edit."
+        result["compile"] = True
+        result["compile_note"] = "ColorIt's Qwen loop compiles fixed-shape CFG transformer calls."
         return result
 
 
@@ -140,6 +146,7 @@ class QwenImageEditRunner:
         from mflux.models.common.config import ModelConfig
         from mflux.models.qwen.variants.edit.qwen_image_edit import QwenImageEdit
         from .qwen_2511 import enable_zero_cond_t
+        from .optimized import QwenCompiledEditLoop
 
         if self.config.mlx_cache_limit_gb is not None:
             mx.metal.set_cache_limit(self.config.mlx_cache_limit_gb * 1024**3)
@@ -150,6 +157,67 @@ class QwenImageEditRunner:
             model_config=ModelConfig.qwen_image_edit(),
         )
         enable_zero_cond_t(self._model)
+        self.compiled_loop = QwenCompiledEditLoop(
+            self._model,
+            cfg_mode=self.config.cfg_mode,
+            fused_cfg_max_batch=self.config.fused_cfg_max_batch,
+        )
+
+    def generate_batch(
+        self,
+        image_path: Path,
+        prompt: str,
+        *,
+        negative_prompt: str = "",
+        seeds: list[int] | None = None,
+    ) -> list[object]:
+        """Generate every seed with one prepared source image and prompt."""
+
+        image_path = image_path.resolve()
+        if not image_path.is_file():
+            raise FileNotFoundError(image_path)
+        use_seeds = [self.config.seed] if seeds is None else list(seeds)
+        if not use_seeds:
+            raise ValueError("seeds must not be empty")
+        images = self.compiled_loop.generate_batch(
+            image_path=str(image_path),
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            seeds=use_seeds,
+            width=self.config.width,
+            height=self.config.height,
+            steps=self.config.steps,
+            guidance=self.config.guidance,
+            scheduler=self.config.scheduler,
+        )
+        self._mx.eval(self._mx.array(0))
+        return images
+
+    def edit_batch(
+        self,
+        image_path: Path,
+        prompt: str,
+        output_paths: list[Path],
+        *,
+        negative_prompt: str = "",
+        seeds: list[int] | None = None,
+    ) -> list[Path]:
+        """Write one output per seed through the compiled batch path."""
+
+        use_seeds = [self.config.seed] if seeds is None else list(seeds)
+        if len(output_paths) != len(use_seeds):
+            raise ValueError("output_paths and seeds must have the same length")
+        generated = self.generate_batch(
+            image_path,
+            prompt,
+            negative_prompt=negative_prompt,
+            seeds=use_seeds,
+        )
+        resolved = [path.resolve() for path in output_paths]
+        for image, output_path in zip(generated, resolved, strict=True):
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            image.save(str(output_path), export_json_metadata=True)
+        return resolved
 
     def edit(
         self,
@@ -160,28 +228,15 @@ class QwenImageEditRunner:
         negative_prompt: str = "",
         seed: int | None = None,
     ) -> Path:
-        """Color one image, retaining this runner's loaded weights for later calls."""
+        """Color one image through the same compiled batch path used by sweeps."""
 
-        image_path = image_path.resolve()
-        output_path = output_path.resolve()
-        if not image_path.is_file():
-            raise FileNotFoundError(image_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        generated = self._model.generate_image(
-            seed=self.config.seed if seed is None else seed,
-            prompt=prompt,
+        return self.edit_batch(
+            image_path,
+            prompt,
+            [output_path],
             negative_prompt=negative_prompt,
-            image_path=str(image_path),
-            image_paths=[str(image_path)],
-            num_inference_steps=self.config.steps,
-            guidance=self.config.guidance,
-            width=self.config.width,
-            height=self.config.height,
-            scheduler=self.config.scheduler,
-        )
-        generated.save(str(output_path), export_json_metadata=True)
-        self._mx.eval(self._mx.array(0))
-        return output_path
+            seeds=[self.config.seed if seed is None else seed],
+        )[0]
 
 
 def smoke_check() -> dict[str, str]:

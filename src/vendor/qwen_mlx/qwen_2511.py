@@ -53,6 +53,75 @@ def apply_zero_condition_modulation(x, mod_params, index):
     return x * (1 + scale) + shift, gate
 
 
+def qwen_transformer_forward(
+    transformer,
+    timestep,
+    config,
+    hidden_states,
+    encoder_hidden_states,
+    encoder_hidden_states_mask,
+    cond_image_grid=None,
+):
+    """Compiled Qwen transformer path that accepts an MLX scalar timestep.
+
+    MFLUX's public transformer converts a Python denoise-step index to a
+    scalar with NumPy. That is fine in its eager loop but blocks ``mx.compile``.
+    This version receives the scheduler's scalar directly and keeps it in the
+    MLX graph, so one graph handles every denoise step of a fixed shape.
+    """
+
+    import mlx.core as mx
+
+    zero_cond_t = getattr(transformer, "zero_cond_t", False)
+    hidden_states = transformer.img_in(hidden_states)
+    batch_size = hidden_states.shape[0]
+    timestep = mx.broadcast_to(mx.reshape(timestep, (1,)), (batch_size,)).astype(hidden_states.dtype)
+    if zero_cond_t:
+        timestep = zero_condition_timesteps(timestep)
+    encoder_hidden_states = transformer.txt_in(transformer.txt_norm(encoder_hidden_states))
+    text_embeddings = transformer.time_text_embed(timestep, hidden_states)
+    image_rotary_embeddings = transformer._compute_rotary_embeddings(
+        encoder_hidden_states_mask=encoder_hidden_states_mask,
+        pos_embed=transformer.pos_embed,
+        config=config,
+        cond_image_grid=cond_image_grid,
+    )
+    modulate_index = None
+    if zero_cond_t:
+        conditioned_tokens = 0
+        if cond_image_grid is not None:
+            grids = cond_image_grid if isinstance(cond_image_grid, list) else [cond_image_grid]
+            conditioned_tokens = sum(height * width for _, height, width in grids)
+        generated_tokens = hidden_states.shape[1] - conditioned_tokens
+        if generated_tokens < 0:
+            raise ValueError("Qwen 2511 conditioning grid exceeds image token count")
+        modulate_index = token_modulation_index(batch_size, generated_tokens, conditioned_tokens)
+    for index, block in enumerate(transformer.transformer_blocks):
+        arguments = {
+            "hidden_states": hidden_states,
+            "encoder_hidden_states": encoder_hidden_states,
+            "encoder_hidden_states_mask": encoder_hidden_states_mask,
+            "text_embeddings": text_embeddings,
+            "image_rotary_emb": image_rotary_embeddings,
+            "block_idx": index,
+        }
+        if zero_cond_t:
+            arguments["modulate_index"] = modulate_index
+        encoder_hidden_states, hidden_states = block(**arguments)
+    if zero_cond_t:
+        text_embeddings = text_embeddings[: text_embeddings.shape[0] // 2]
+    return transformer.proj_out(transformer.norm_out(hidden_states, text_embeddings))
+
+
+def zero_cond_transformer_forward(*args, **kwargs):
+    """Run the Qwen 2511-only compiled path and reject a wrong checkpoint."""
+
+    transformer = args[0] if args else kwargs["transformer"]
+    if not getattr(transformer, "zero_cond_t", False):
+        raise ValueError("Qwen Image Edit 2511 requires zero_cond_t")
+    return qwen_transformer_forward(*args, **kwargs)
+
+
 def enable_zero_cond_t(model) -> None:
     """Enable Qwen 2511 token-wise timestep conditioning on one mflux model."""
 
@@ -138,39 +207,16 @@ def enable_zero_cond_t(model) -> None:
                 qwen_image_ids,
                 cond_image_grid,
             )
-        hidden_states = self.img_in(hidden_states)
-        batch_size = hidden_states.shape[0]
         timestep = self._compute_timestep(t, config)
-        timestep = mx.broadcast_to(timestep, (batch_size,)).astype(hidden_states.dtype)
-        timestep = zero_condition_timesteps(timestep)
-        encoder_hidden_states = self.txt_in(self.txt_norm(encoder_hidden_states))
-        text_embeddings = self.time_text_embed(timestep, hidden_states)
-        image_rotary_embeddings = self._compute_rotary_embeddings(
-            encoder_hidden_states_mask=encoder_hidden_states_mask,
-            pos_embed=self.pos_embed,
-            config=config,
-            cond_image_grid=cond_image_grid,
+        return zero_cond_transformer_forward(
+            self,
+            timestep,
+            config,
+            hidden_states,
+            encoder_hidden_states,
+            encoder_hidden_states_mask,
+            cond_image_grid,
         )
-        conditioned_tokens = 0
-        if cond_image_grid is not None:
-            grids = cond_image_grid if isinstance(cond_image_grid, list) else [cond_image_grid]
-            conditioned_tokens = sum(height * width for _, height, width in grids)
-        generated_tokens = hidden_states.shape[1] - conditioned_tokens
-        if generated_tokens < 0:
-            raise ValueError("Qwen 2511 conditioning grid exceeds image token count")
-        modulate_index = token_modulation_index(batch_size, generated_tokens, conditioned_tokens)
-        for index, block in enumerate(self.transformer_blocks):
-            encoder_hidden_states, hidden_states = block(
-                hidden_states=hidden_states,
-                encoder_hidden_states=encoder_hidden_states,
-                encoder_hidden_states_mask=encoder_hidden_states_mask,
-                text_embeddings=text_embeddings,
-                image_rotary_emb=image_rotary_embeddings,
-                block_idx=index,
-                modulate_index=modulate_index,
-            )
-        text_embeddings = text_embeddings[: text_embeddings.shape[0] // 2]
-        return self.proj_out(self.norm_out(hidden_states, text_embeddings))
 
     QwenTransformerBlock._modulate = staticmethod(modulate)
     QwenTransformerBlock.__call__ = block_call

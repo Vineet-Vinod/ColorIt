@@ -101,10 +101,17 @@ class CompiledQwenCFG:
         self.transformer = transformer
         self.config = config
         self.static_image_latents = static_image_latents
-        self.positive_prompt_embeds = positive_prompt_embeds
-        self.positive_prompt_mask = positive_prompt_mask
-        self.negative_prompt_embeds = negative_prompt_embeds
-        self.negative_prompt_mask = negative_prompt_mask
+        (
+            self.positive_prompt_embeds,
+            self.positive_prompt_mask,
+            self.negative_prompt_embeds,
+            self.negative_prompt_mask,
+        ) = self._pad_prompt_pair(
+            positive_prompt_embeds,
+            positive_prompt_mask,
+            negative_prompt_embeds,
+            negative_prompt_mask,
+        )
         self.cond_image_grid = cond_image_grid
         self.guidance = guidance
         self.cfg_mode = cfg_mode
@@ -114,6 +121,26 @@ class CompiledQwenCFG:
         self._positive_predict = None
         self._negative_predict = None
         self._fused_predict = None
+
+    @staticmethod
+    def _pad_prompt_pair(positive, positive_mask, negative, negative_mask):
+        """Pad CFG text sequences so they can share one transformer batch."""
+
+        import mlx.core as mx
+
+        token_count = max(positive.shape[1], negative.shape[1])
+
+        def pad(embeds, mask):
+            missing = token_count - embeds.shape[1]
+            if not missing:
+                return embeds, mask
+            embeds = mx.pad(embeds, ((0, 0), (0, missing), (0, 0)))
+            mask = mx.pad(mask, ((0, 0), (0, missing)))
+            return embeds, mask
+
+        positive, positive_mask = pad(positive, positive_mask)
+        negative, negative_mask = pad(negative, negative_mask)
+        return positive, positive_mask, negative, negative_mask
 
     @staticmethod
     def _guided_noise(positive, negative, guidance):

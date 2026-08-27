@@ -84,16 +84,17 @@ class CompiledQwenCFGTest(unittest.TestCase):
     def _cfg(self, *, batch_size, mode="auto"):
         static = mx.zeros((batch_size, 2, 1), dtype=mx.float32)
         positive = mx.full((batch_size, 1, 1), 2.0, dtype=mx.float32)
-        negative = mx.full((batch_size, 1, 1), -1.0, dtype=mx.float32)
-        mask = mx.ones((batch_size, 1), dtype=mx.float32)
+        negative = mx.full((batch_size, 2, 1), -1.0, dtype=mx.float32)
+        positive_mask = mx.ones((batch_size, 1), dtype=mx.float32)
+        negative_mask = mx.ones((batch_size, 2), dtype=mx.float32)
         return CompiledQwenCFG(
             transformer=object(),
             config=object(),
             static_image_latents=static,
             positive_prompt_embeds=positive,
-            positive_prompt_mask=mask,
+            positive_prompt_mask=positive_mask,
             negative_prompt_embeds=negative,
-            negative_prompt_mask=mask,
+            negative_prompt_mask=negative_mask,
             cond_image_grid=(1, 1, 2),
             guidance=1.0,
             cfg_mode=mode,

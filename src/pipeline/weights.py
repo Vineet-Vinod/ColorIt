@@ -250,9 +250,13 @@ def run_download_weights(
             }
         )
 
-    payload = {
-        "weights": weights,
-    }
+    payload: dict[str, Any] = {"weights": weights}
+    if manifest_path.exists():
+        with manifest_path.open(encoding="utf-8") as handle:
+            existing = json.load(handle)
+        if isinstance(existing, dict) and isinstance(existing.get("image_edit_models"), dict):
+            payload["schema_version"] = existing.get("schema_version", 1)
+            payload["image_edit_models"] = existing["image_edit_models"]
     write_weights_manifest(manifest_path, payload)
     print(f"Manifest written to {manifest_path}")
     return 0

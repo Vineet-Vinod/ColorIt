@@ -20,6 +20,7 @@ from src.pipeline.ffmpeg_utils import (
 )
 from src.pipeline.manifest import load_json_manifest, utc_now_iso, write_json_manifest
 from src.pipeline.keyframes import KEYFRAME_COLORING_MODELS
+from src.pipeline.image_edit_keyframes import keyframe_model_fingerprint
 from src.pipeline.paths import ensure_runtime_directories, resolve_project_paths
 from src.pipeline.scenes import load_scene_manifest, run_detect_scenes, scene_manifest_matches
 
@@ -255,7 +256,10 @@ def _build_run_id(
     if pipeline == "default":
         return base
     settings_payload = json.dumps(
-        deepremaster_settings or {},
+        {
+            "settings": deepremaster_settings or {},
+            "keyframe_model_fingerprint": keyframe_model_fingerprint(coloring_model),
+        },
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -270,10 +274,10 @@ def _cleanup_movie_artifacts(*, paths, run_id: str) -> None:
         paths.colorized_dir / "clahe" / run_id,
         paths.colorized_dir / "deoldify" / run_id,
         paths.colorized_dir / "ddcolor" / run_id,
-        paths.colorized_dir / "keyframes" / "deoldify" / run_id,
-        paths.colorized_dir / "keyframes" / "deoldify_stable" / run_id,
-        paths.colorized_dir / "keyframes" / "ddcolor" / run_id,
-        paths.colorized_dir / "keyframes" / "ddcolor_artistic" / run_id,
+        *[
+            paths.colorized_dir / "keyframes" / model / run_id
+            for model in KEYFRAME_COLORING_MODELS
+        ],
         paths.final_dir / f"{run_id}_assembly_work.mp4",
         paths.manifest_dir / f"{run_id}.json",
         paths.manifest_dir / f"movie_run_{run_id}.json",

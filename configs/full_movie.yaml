@@ -20,6 +20,16 @@ deep_remaster:
   deoldify_render_factor: 45
   deoldify_stable_render_factor: 35
   ddcolor_input_size: 512
+  image_edit:
+    width: 1024
+    height: 576
+    quantize: 8
+    seed: 101
+    flux_steps: 4
+    qwen_steps: 20
+    firered_steps: 20
+    qwen_guidance: 2.5
+    palette_anchor: false
   precision: float16
   min_dimension: 384
   reference_min_dimension: 384

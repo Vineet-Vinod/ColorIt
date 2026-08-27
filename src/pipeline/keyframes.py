@@ -13,6 +13,11 @@ from src.pipeline.config import AppConfig
 from src.pipeline.ddcolor_clip import _load_colorizer, _select_device
 from src.pipeline.ffmpeg_utils import extract_single_frame, ffprobe_media
 from src.pipeline.inference import colorize_rgb_batch
+from src.pipeline.image_edit_keyframes import (
+    IMAGE_EDIT_KEYFRAME_MODELS,
+    ImageEditKeyframeColorizer,
+    ImageEditKeyframeOptions,
+)
 from src.pipeline.model_loader import (
     ModelBundle,
     load_artistic_colorizer_bundle,
@@ -31,6 +36,7 @@ KEYFRAME_COLORING_MODELS = (
     "deoldify_stable",
     "ddcolor",
     "ddcolor_artistic",
+    *IMAGE_EDIT_KEYFRAME_MODELS,
 )
 
 
@@ -120,6 +126,10 @@ class KeyframeColorizer:
             )
         self._deoldify: ModelBundle | None = None
         self._ddcolor = None
+        self._image_editor: ImageEditKeyframeColorizer | None = None
+        self.image_edit_options = ImageEditKeyframeOptions.from_settings(
+            settings.get("image_edit", {})
+        )
 
     def colorize_scene_midpoint(
         self,
@@ -228,6 +238,16 @@ class KeyframeColorizer:
         return [record for record in records if record is not None]
 
     def _colorize_batch(self, *, source_paths: list[Path], colored_paths: list[Path]) -> None:
+        if self.model_name in IMAGE_EDIT_KEYFRAME_MODELS:
+            if self._image_editor is None:
+                self._image_editor = ImageEditKeyframeColorizer(
+                    model=self.model_name,
+                    model_root=self.root / "models" / "image-edit",
+                    options=self.image_edit_options,
+                )
+            self._image_editor.colorize(source_paths, colored_paths)
+            return
+
         if self.model_name in {"deoldify", "deoldify_stable"}:
             if self._deoldify is None:
                 if self.model_name == "deoldify_stable":

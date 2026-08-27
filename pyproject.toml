@@ -9,11 +9,18 @@ dependencies = [
   "numpy>=1.26,<3",
   "opencv-python-headless>=4.10,<5",
   "scikit-image>=0.25,<1",
-  "Pillow>=10,<12",
+  "Pillow>=12.3,<13",
   "PyYAML>=6.0,<7.0",
   "torch>=2.6,<3",
   "torchvision>=0.21,<1",
   "tqdm>=4.67,<5",
+]
+
+[project.optional-dependencies]
+# Native MLX image editors are large and optional. MFLUX supplies the shared
+# Qwen Image Edit, FireRed, and FLUX.2 kernels used by the local adapters.
+image-edit = [
+  "mflux==0.19.1",
 ]
 
 [project.scripts]

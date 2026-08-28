@@ -35,7 +35,7 @@ class ImageEditKeyframeOptions:
     quantize: int = 8
     seed: int = 101
     flux_steps: int = 4
-    flux_batch_size: int = 4
+    flux_batch_size: int = 8
     qwen_steps: int = 20
     firered_steps: int = 20
     qwen_guidance: float = 2.5
@@ -53,7 +53,7 @@ class ImageEditKeyframeOptions:
             quantize=int(raw.get("quantize", 8)),
             seed=int(raw.get("seed", 101)),
             flux_steps=int(raw.get("flux_steps", 4)),
-            flux_batch_size=int(raw.get("flux_batch_size", 4)),
+            flux_batch_size=int(raw.get("flux_batch_size", 8)),
             qwen_steps=int(raw.get("qwen_steps", 20)),
             firered_steps=int(raw.get("firered_steps", 20)),
             qwen_guidance=float(raw.get("qwen_guidance", 2.5)),

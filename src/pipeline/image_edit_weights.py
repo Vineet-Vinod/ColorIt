@@ -186,7 +186,7 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModel] = {
         files=(
             *_BONSAI_COMMON_FILES,
             _snapshot_file("manifest.json", 4_617, "898f6743600667071a354bd4fc98004afb5f20703e59e267b86e86d62937d061"),
-            _snapshot_file("README.md", 11_996, "1527258bbdd58161a3241245985c78ad5503635fd32bc2d0d37634c192a574e5"),
+            _snapshot_file("README.md", 11_977, "5a0981c5d4522a1765c1a5737683c6cacfee73e7e0436a6bbb4c440106a6a252"),
             _snapshot_file("transformer-packed-mflux/diffusion_pytorch_model.safetensors", 965_208_136, "1792b31d857d95fcbe32df8e6d2fc96b30e800a195e295565d033deccea2dd75"),
             _snapshot_file("transformer-packed-mflux/quantization_config.json", 5_054, "ff8e78812e547f25868eff7b9a86cbcf7a91bee95f81f2bf0e039f198dbbabf0"),
         ),
@@ -201,7 +201,7 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModel] = {
         files=(
             *_BONSAI_COMMON_FILES,
             _snapshot_file("manifest.json", 4_619, "a82ee88186754b17e7796d3d0130a6ead7e51198f0a61d3f936fab71a3eba178"),
-            _snapshot_file("README.md", 12_443, "4017f9c74fc1f89212a8b736a29bcc742fe1fe4679fbeb1a5818bf395f80d55e"),
+            _snapshot_file("README.md", 12_424, "73bec352039d801559357869798a85898e05593450dc33a1aecb98c4ac8b34a4"),
             _snapshot_file("transformer-packed-mflux/diffusion_pytorch_model.safetensors", 1_425_271_472, "b21737bdf02690b7d662907781c4dc8b8bf22a2c98b823b1ca3336f48371a84f"),
             _snapshot_file("transformer-packed-mflux/quantization_config.json", 5_054, "6a792a07051e534b177aefaac5222796ec13bbdd1a597a2b08695b4c6c75fec7"),
         ),
@@ -427,6 +427,10 @@ def download_snapshot_file(
         raise ValueError(f"Download part path is not a file: {part}")
     if file.size_bytes is not None and part.exists() and part.stat().st_size > file.size_bytes:
         part.unlink()
+    if file.size_bytes is not None and part.exists() and part.stat().st_size == file.size_bytes:
+        verify_snapshot_file(part, file)
+        part.replace(destination)
+        return True
 
     start = part.stat().st_size if part.exists() else 0
     url = build_resolve_url(model, file)

@@ -125,6 +125,22 @@ class ImageEditWeightsTest(unittest.TestCase):
             self.assertEqual(target.read_bytes(), payload)
             self.assertEqual(requests[1].get_header("Range"), "bytes=8-")
 
+    def test_complete_part_is_verified_without_an_invalid_range_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            payload = b"verified model bytes"
+            model, file = _model_with_file(payload)
+            target = Path(directory) / file.path
+            target.parent.mkdir(parents=True)
+            target.with_name(target.name + ".part").write_bytes(payload)
+
+            weights.download_snapshot_file(
+                model,
+                file,
+                target,
+                urlopen=lambda _request: self.fail("complete part must not request the network"),
+            )
+            self.assertEqual(target.read_bytes(), payload)
+
     def test_checksum_failure_leaves_only_resumable_part(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             payload = b"verified model bytes"

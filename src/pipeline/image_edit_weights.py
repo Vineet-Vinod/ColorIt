@@ -148,7 +148,64 @@ _QWEN_VAE = _snapshot_file(
 )
 
 
+_BONSAI_COMMON_FILES = (
+    _snapshot_file("LICENSE", 10_174, "69849221bfb90053de2134ef5e6d540287b4b98062326492f1f96f5da685524b"),
+    _snapshot_file("NOTICE.md", 623, "bbefa4a26b836efc040c1a0f155a425d1d833eae1b2534ffc414b1eada3cd922"),
+    _snapshot_file("model_index.json", 81, "ecb4735e37691a8733f62957fd6c548f841af40624905bb24fa639756153c8a1"),
+    _snapshot_file("scheduler/scheduler_config.json", 486, "067afb012cef64553a763447d1efd93daeffcc0123ca7e25b09f8de20b90762e"),
+    _snapshot_file("text_encoder-mlx-4bit/added_tokens.json", 707, "c0284b582e14987fbd3d5a2cb2bd139084371ed9acbae488829a1c900833c680"),
+    _snapshot_file("text_encoder-mlx-4bit/config.json", 937, "b5efdcf3b0035a3638e7228dad4d85f5c4a23f156eb7cdb0b44c8366a5d34d9b"),
+    _snapshot_file("text_encoder-mlx-4bit/merges.txt", 1_671_853, "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"),
+    _snapshot_file("text_encoder-mlx-4bit/model.safetensors", 2_263_022_529, "e240c0bdc0ebb0681bf0da0f98d9719fd6ebe269a3633f81542c13e81345651d"),
+    _snapshot_file("text_encoder-mlx-4bit/model.safetensors.index.json", 63_924, "f7825defe5865d179c3b593173d37056be5f202dcb7153985cf74e75ecf1628b"),
+    _snapshot_file("text_encoder-mlx-4bit/special_tokens_map.json", 613, "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd"),
+    _snapshot_file("text_encoder-mlx-4bit/tokenizer.json", 11_422_654, "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"),
+    _snapshot_file("text_encoder-mlx-4bit/tokenizer_config.json", 9_706, "253153d0738ceb4c668d2eff957714dd2bea0b56de772a9fdccd96cbf517e6a0"),
+    _snapshot_file("text_encoder-mlx-4bit/vocab.json", 2_776_833, "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
+    _snapshot_file("tokenizer/added_tokens.json", 707, "c0284b582e14987fbd3d5a2cb2bd139084371ed9acbae488829a1c900833c680"),
+    _snapshot_file("tokenizer/chat_template.jinja", 4_168, "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8"),
+    _snapshot_file("tokenizer/merges.txt", 1_671_853, "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"),
+    _snapshot_file("tokenizer/special_tokens_map.json", 613, "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd"),
+    _snapshot_file("tokenizer/tokenizer.json", 11_422_654, "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"),
+    _snapshot_file("tokenizer/tokenizer_config.json", 5_404, "443bfa629eb16387a12edbf92a76f6a6f10b2af3b53d87ba1550adfcf45f7fa0"),
+    _snapshot_file("tokenizer/vocab.json", 2_776_833, "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
+    _snapshot_file("transformer-packed-mflux/config.json", 619, "14c6d8314d28cc027ce636d52dfb98cecc11b65c1455bd51b394a971f4b7b49e"),
+    _snapshot_file("vae/config.json", 821, "0d6dfb69ae95a5e2ac9836284bbb63d8b38ce67b25ba2dff380752b2a10ab948"),
+    _snapshot_file("vae/diffusion_pytorch_model.safetensors", 168_120_878, "ca70d2202afe6415bdbcb8793ba8cd99fd159cfe6192381504d6c4d3036e0f04"),
+)
+
+
 IMAGE_EDIT_MODELS: dict[str, ImageEditModel] = {
+    "bonsai_image_binary_4b_mlx_1bit": ImageEditModel(
+        name="bonsai_image_binary_4b_mlx_1bit",
+        repo_id="prism-ml/bonsai-image-binary-4B-mlx-1bit",
+        revision="d1b3ac11a7f1ba61d84b277339daeeed4a98e0e2",
+        license="apache-2.0",
+        destination_name="bonsai-image-binary-4b-mlx-1bit",
+        source_url="https://huggingface.co/prism-ml/bonsai-image-binary-4B-mlx-1bit",
+        files=(
+            *_BONSAI_COMMON_FILES,
+            _snapshot_file("manifest.json", 4_617, "898f6743600667071a354bd4fc98004afb5f20703e59e267b86e86d62937d061"),
+            _snapshot_file("README.md", 11_996, "1527258bbdd58161a3241245985c78ad5503635fd32bc2d0d37634c192a574e5"),
+            _snapshot_file("transformer-packed-mflux/diffusion_pytorch_model.safetensors", 965_208_136, "1792b31d857d95fcbe32df8e6d2fc96b30e800a195e295565d033deccea2dd75"),
+            _snapshot_file("transformer-packed-mflux/quantization_config.json", 5_054, "ff8e78812e547f25868eff7b9a86cbcf7a91bee95f81f2bf0e039f198dbbabf0"),
+        ),
+    ),
+    "bonsai_image_ternary_4b_mlx_2bit": ImageEditModel(
+        name="bonsai_image_ternary_4b_mlx_2bit",
+        repo_id="prism-ml/bonsai-image-ternary-4B-mlx-2bit",
+        revision="2c24c81b934a658ba5590cf39088ba929985b4a8",
+        license="apache-2.0",
+        destination_name="bonsai-image-ternary-4b-mlx-2bit",
+        source_url="https://huggingface.co/prism-ml/bonsai-image-ternary-4B-mlx-2bit",
+        files=(
+            *_BONSAI_COMMON_FILES,
+            _snapshot_file("manifest.json", 4_619, "a82ee88186754b17e7796d3d0130a6ead7e51198f0a61d3f936fab71a3eba178"),
+            _snapshot_file("README.md", 12_443, "4017f9c74fc1f89212a8b736a29bcc742fe1fe4679fbeb1a5818bf395f80d55e"),
+            _snapshot_file("transformer-packed-mflux/diffusion_pytorch_model.safetensors", 1_425_271_472, "b21737bdf02690b7d662907781c4dc8b8bf22a2c98b823b1ca3336f48371a84f"),
+            _snapshot_file("transformer-packed-mflux/quantization_config.json", 5_054, "6a792a07051e534b177aefaac5222796ec13bbdd1a597a2b08695b4c6c75fec7"),
+        ),
+    ),
     "firered_image_edit_1_1": ImageEditModel(
         name="firered_image_edit_1_1",
         repo_id="FireRedTeam/FireRed-Image-Edit-1.1",

@@ -59,7 +59,13 @@ class ImageEditWeightsTest(unittest.TestCase):
         automatic = [model for model in weights.IMAGE_EDIT_MODELS.values() if model.automatic_download]
         self.assertEqual(
             {model.name for model in automatic},
-            {"firered_image_edit_1_1", "flux2_klein_4b", "qwen_image_edit_2511"},
+            {
+                "bonsai_image_binary_4b_mlx_1bit",
+                "bonsai_image_ternary_4b_mlx_2bit",
+                "firered_image_edit_1_1",
+                "flux2_klein_4b",
+                "qwen_image_edit_2511",
+            },
         )
         for model in automatic:
             self.assertTrue(model.source_url.startswith("https://huggingface.co/"))

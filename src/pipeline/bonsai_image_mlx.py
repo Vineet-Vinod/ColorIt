@@ -29,6 +29,7 @@ PRISM_MFLUX_REVISION = "bcd13e83b7fcfd76186c98ef322dd9cf28e996c1"
 PRISM_MLX_REVISION = "b9effaf65ecce0e99a2fb23c8962d34eff95b625"
 
 BonsaiVariant = Literal["binary", "ternary"]
+BonsaiConditioning = Literal["edit", "img2img"]
 _MODEL_NAMES = {
     "binary": "bonsai_image_binary_4b_mlx_1bit",
     "ternary": "bonsai_image_ternary_4b_mlx_2bit",
@@ -39,12 +40,18 @@ _PRECISIONS = {"binary": "1bit", "ternary": "2bit"}
 @dataclass(frozen=True)
 class BonsaiImageOptions:
     variant: BonsaiVariant
+    conditioning: BonsaiConditioning = "edit"
+    image_strength: float = 0.5
     steps: int = 4
     guidance: float = 1.0
 
     def __post_init__(self) -> None:
         if self.variant not in _MODEL_NAMES:
             raise ValueError("variant must be 'binary' or 'ternary'")
+        if self.conditioning not in ("edit", "img2img"):
+            raise ValueError("conditioning must be 'edit' or 'img2img'")
+        if not 0.0 < self.image_strength <= 1.0:
+            raise ValueError("image_strength must be in (0, 1]")
         if self.steps != 4:
             raise ValueError("Bonsai Image is distilled for exactly four denoising steps")
         if self.guidance != 1.0:
@@ -97,16 +104,23 @@ class BonsaiImageMLXColorizer:
         loader = getattr(model, "load_transformer_and_vae", None)
         if callable(loader):
             loader()
-        generated = model.generate_image(
-            seed=seed,
-            prompt=prompt,
-            num_inference_steps=self.options.steps,
-            width=width,
-            height=height,
-            guidance=self.options.guidance,
-            image_paths=[source],
-            scheduler="flow_match_euler_discrete",
-        )
+        common = {
+            "seed": seed,
+            "prompt": prompt,
+            "num_inference_steps": self.options.steps,
+            "width": width,
+            "height": height,
+            "guidance": self.options.guidance,
+            "scheduler": "flow_match_euler_discrete",
+        }
+        if self.options.conditioning == "edit":
+            generated = model.generate_image(**common, image_paths=[source])
+        else:
+            generated = model.generate_image(
+                **common,
+                image_path=source,
+                image_strength=self.options.image_strength,
+            )
         image = getattr(generated, "image", generated)
         if not isinstance(image, Image.Image):
             raise TypeError("Prism MFLUX returned an unexpected image result")
@@ -116,7 +130,7 @@ class BonsaiImageMLXColorizer:
         if self._model is None:
             record = IMAGE_EDIT_MODELS[_MODEL_NAMES[self.options.variant]]
             verify_model_snapshot(record, self.model_dir)
-            factory = self._model_factory or _prism_edit_factory()
+            factory = self._model_factory or _prism_model_factory(self.options.conditioning)
             self._model = factory(
                 model_path=str(self.model_dir),
                 precision=_PRECISIONS[self.options.variant],
@@ -124,7 +138,7 @@ class BonsaiImageMLXColorizer:
         return self._model
 
 
-def _prism_edit_factory() -> Callable[..., Any]:
+def _prism_model_factory(conditioning: BonsaiConditioning = "edit") -> Callable[..., Any]:
     """Build a packed-transformer edit model inside Prism's isolated runtime."""
 
     try:
@@ -143,6 +157,7 @@ def _prism_edit_factory() -> Callable[..., Any]:
         from mflux.models.flux2.model.flux2_transformer.klein_fast import blocks as fast_blocks
         from mflux.models.flux2.model.flux2_vae.vae import Flux2VAE
         from mflux.models.flux2.variants.edit.flux2_klein_edit import Flux2KleinEdit
+        from mflux.models.flux2.variants.txt2img.flux2_klein import Flux2Klein
         from mflux.models.flux2.weights.flux2_weight_definition import Flux2KleinWeightDefinition
     except ImportError as exc:
         raise RuntimeError(
@@ -248,10 +263,11 @@ def _prism_edit_factory() -> Callable[..., Any]:
         gc.collect()
         mx.clear_cache()
 
+    Flux2Initializer.reload_text_encoder = staticmethod(load_text_encoder)
+
     class PackedFlux2KleinEdit(Flux2KleinEdit):
         def __init__(self, *, model_path: str, precision: str) -> None:
             nn.Module.__init__(self)
-            Flux2Initializer.reload_text_encoder = staticmethod(load_text_encoder)
             Flux2Initializer.init(
                 model=self,
                 quantize=None,
@@ -273,12 +289,37 @@ def _prism_edit_factory() -> Callable[..., Any]:
         def load_transformer_and_vae(self) -> None:
             load_transformer_and_vae(self)
 
-    return PackedFlux2KleinEdit
+    Flux2Initializer.load_transformer_and_vae = staticmethod(load_transformer_and_vae)
+
+    if conditioning == "edit":
+        return PackedFlux2KleinEdit
+
+    def packed_img2img(*, model_path: str, precision: str) -> Any:
+        model = Flux2Klein(
+            model_path=model_path,
+            quantize=None,
+            use_klein_fast_transformer=True,
+            klein_fast_precision=precision,
+            vae_variant="full",
+            evict_text_encoder=False,
+            lazy_components=False,
+            bucketed_seq_len=False,
+        )
+        model._colorit_kernel_mode = (
+            "mlx_cached_bfloat16_fallback"
+            if precision == "1bit" and binary_fallback
+            else "prism_native_packed"
+        )
+        return model
+
+    return packed_img2img
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run verified Bonsai Image MLX editing.")
     parser.add_argument("--variant", choices=tuple(_MODEL_NAMES), required=True)
+    parser.add_argument("--conditioning", choices=("edit", "img2img"), default="edit")
+    parser.add_argument("--image-strength", type=float, default=0.5)
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -294,7 +335,11 @@ def main() -> int:
     args = _parser().parse_args()
     colorizer = BonsaiImageMLXColorizer(
         args.model_dir,
-        BonsaiImageOptions(variant=args.variant),
+        BonsaiImageOptions(
+            variant=args.variant,
+            conditioning=args.conditioning,
+            image_strength=args.image_strength,
+        ),
     )
     started = time.perf_counter()
     colorizer.warmup()
@@ -324,6 +369,8 @@ def main() -> int:
                     "steps": 4,
                     "guidance": 1.0,
                     "kernel_mode": colorizer.kernel_mode,
+                    "conditioning": args.conditioning,
+                    "image_strength": args.image_strength,
                 },
                 indent=2,
                 sort_keys=True,

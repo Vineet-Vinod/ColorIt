@@ -29,6 +29,8 @@ class BonsaiImageMLXTest(unittest.TestCase):
             BonsaiImageOptions(variant="binary", steps=5)
         with self.assertRaisesRegex(ValueError, "guidance"):
             BonsaiImageOptions(variant="ternary", guidance=2.0)
+        with self.assertRaisesRegex(ValueError, "image_strength"):
+            BonsaiImageOptions(variant="ternary", image_strength=0.0)
 
     def test_reference_conditioned_generation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -61,6 +63,29 @@ class BonsaiImageMLXTest(unittest.TestCase):
             self.assertEqual(made[0].calls[0]["image_paths"], [source.resolve()])
             self.assertEqual(made[0].calls[0]["num_inference_steps"], 4)
             self.assertEqual(colorizer.kernel_mode, "prism_native")
+
+    def test_img2img_conditioning_uses_strength(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.png"
+            Image.new("RGB", (64, 64)).save(source)
+            model = _Model()
+            colorizer = BonsaiImageMLXColorizer(
+                root,
+                BonsaiImageOptions(variant="ternary", conditioning="img2img", image_strength=0.625),
+                model_factory=lambda **_kwargs: model,
+            )
+            with patch("src.pipeline.bonsai_image_mlx.verify_model_snapshot"):
+                colorizer.generate(
+                    source_image=source,
+                    prompt="Colorize only",
+                    seed=101,
+                    width=64,
+                    height=64,
+                )
+            self.assertEqual(model.calls[0]["image_path"], source.resolve())
+            self.assertEqual(model.calls[0]["image_strength"], 0.625)
+            self.assertNotIn("image_paths", model.calls[0])
 
 
 if __name__ == "__main__":

@@ -35,6 +35,7 @@ class ImageEditKeyframeOptions:
     quantize: int = 8
     seed: int = 101
     flux_steps: int = 4
+    flux_batch_size: int = 4
     qwen_steps: int = 20
     firered_steps: int = 20
     qwen_guidance: float = 2.5
@@ -52,6 +53,7 @@ class ImageEditKeyframeOptions:
             quantize=int(raw.get("quantize", 8)),
             seed=int(raw.get("seed", 101)),
             flux_steps=int(raw.get("flux_steps", 4)),
+            flux_batch_size=int(raw.get("flux_batch_size", 4)),
             qwen_steps=int(raw.get("qwen_steps", 20)),
             firered_steps=int(raw.get("firered_steps", 20)),
             qwen_guidance=float(raw.get("qwen_guidance", 2.5)),
@@ -73,6 +75,8 @@ class ImageEditKeyframeOptions:
             raise ValueError("DeepRemaster image_edit.seed must be non-negative")
         if min(self.flux_steps, self.qwen_steps, self.firered_steps) < 1:
             raise ValueError("DeepRemaster image editor step counts must be positive")
+        if self.flux_batch_size < 1:
+            raise ValueError("DeepRemaster image_edit.flux_batch_size must be positive")
         if self.qwen_guidance < 0:
             raise ValueError("DeepRemaster image_edit.qwen_guidance must be non-negative")
         if not self.prompt.strip() or not self.palette_prompt.strip():
@@ -98,8 +102,32 @@ class ImageEditKeyframeColorizer:
         if self.model_name == "flux2_klein_4b" and self.options.palette_anchor and len(source_paths) > 1:
             self._colorize_flux_palette_bank(source_paths, colored_paths)
             return
+        if self.model_name == "flux2_klein_4b":
+            self._colorize_flux_batches(source_paths, colored_paths)
+            return
         for source, output in zip(source_paths, colored_paths, strict=True):
             self._generate_one(source=source, output=output, prompt=self.options.prompt)
+
+    def _colorize_flux_batches(self, source_paths: list[Path], colored_paths: list[Path]) -> None:
+        runner = self._get_runner()
+        batch_size = self.options.flux_batch_size
+        for offset in range(0, len(source_paths), batch_size):
+            sources = source_paths[offset : offset + batch_size]
+            outputs = colored_paths[offset : offset + batch_size]
+            images = runner.generate_batch(
+                source_images=sources,
+                prompt=self.options.prompt,
+                seeds=[self.options.seed] * len(sources),
+                width=self.options.width,
+                height=self.options.height,
+            )
+            if len(images) != len(outputs):
+                raise RuntimeError("FLUX.2 batch returned an unexpected image count")
+            for image, output in zip(images, outputs, strict=True):
+                if not isinstance(image, Image.Image):
+                    raise TypeError("flux2_klein_4b returned a non-image keyframe")
+                output.parent.mkdir(parents=True, exist_ok=True)
+                image.convert("RGB").save(output)
 
     def _colorize_flux_palette_bank(self, source_paths: list[Path], colored_paths: list[Path]) -> None:
         anchor_index = len(source_paths) // 2

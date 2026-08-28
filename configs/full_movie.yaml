@@ -26,6 +26,7 @@ deep_remaster:
     quantize: 8
     seed: 101
     flux_steps: 4
+    flux_batch_size: 4
     qwen_steps: 20
     firered_steps: 20
     qwen_guidance: 2.5

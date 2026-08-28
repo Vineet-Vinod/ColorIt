@@ -404,6 +404,7 @@ def download_snapshot_file(
     *,
     force: bool = False,
     urlopen: Callable[..., Any] = urllib.request.urlopen,
+    max_attempts: int = 12,
 ) -> bool:
     """Download one file with Range-resume and an atomic final rename.
 
@@ -412,6 +413,8 @@ def download_snapshot_file(
     """
 
     _validate_relative_path(file.path)
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be positive")
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists() and not force:
         verify_snapshot_file(destination, file)
@@ -443,7 +446,16 @@ def download_snapshot_file(
             # The Hub normally honors Range requests. A mirror that does not is
             # safe to use only after discarding the incomplete prefix.
             part.unlink(missing_ok=True)
-            return download_snapshot_file(model, file, destination, force=False, urlopen=urlopen)
+            if max_attempts == 1:
+                raise ValueError(f"Server refused Range retries for {file.path}")
+            return download_snapshot_file(
+                model,
+                file,
+                destination,
+                force=False,
+                urlopen=urlopen,
+                max_attempts=max_attempts - 1,
+            )
         mode = "ab" if start else "wb"
         with part.open(mode) as handle:
             while chunk := response.read(_CHUNK_SIZE):
@@ -451,6 +463,20 @@ def download_snapshot_file(
             handle.flush()
             os.fsync(handle.fileno())
 
+    if file.size_bytes is not None and part.stat().st_size < file.size_bytes:
+        if max_attempts == 1:
+            raise ValueError(
+                f"Download remained incomplete after retries for {file.path}: "
+                f"expected {file.size_bytes}, got {part.stat().st_size}"
+            )
+        return download_snapshot_file(
+            model,
+            file,
+            destination,
+            force=False,
+            urlopen=urlopen,
+            max_attempts=max_attempts - 1,
+        )
     verify_snapshot_file(part, file)
     part.replace(destination)
     return True

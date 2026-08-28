@@ -108,6 +108,23 @@ class ImageEditWeightsTest(unittest.TestCase):
             self.assertEqual(target.read_bytes(), payload)
             self.assertEqual(requests[0].get_header("Range"), "bytes=8-")
 
+    def test_download_retries_a_truncated_response(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            payload = b"verified model bytes"
+            model, file = _model_with_file(payload)
+            target = Path(directory) / file.path
+            requests = []
+
+            def opener(request):
+                requests.append(request)
+                if len(requests) == 1:
+                    return _Response(payload[:8])
+                return _Response(payload[8:], status=206)
+
+            weights.download_snapshot_file(model, file, target, urlopen=opener)
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertEqual(requests[1].get_header("Range"), "bytes=8-")
+
     def test_checksum_failure_leaves_only_resumable_part(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             payload = b"verified model bytes"

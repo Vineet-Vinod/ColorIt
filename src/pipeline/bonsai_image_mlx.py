@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -140,6 +141,24 @@ class BonsaiImageMLXColorizer:
 
 def _prism_model_factory(conditioning: BonsaiConditioning = "edit") -> Callable[..., Any]:
     """Build a packed-transformer edit model inside Prism's isolated runtime."""
+
+    project_root = Path(__file__).resolve().parents[2]
+    prism_source = project_root / "models/prism-bonsai/runtime/source/mflux-prism/src"
+    loaded_mflux = sys.modules.get("mflux")
+    if loaded_mflux is not None:
+        loaded_path = Path(getattr(loaded_mflux, "__file__", "")).resolve()
+        if prism_source not in loaded_path.parents:
+            raise RuntimeError(
+                "A different MFLUX build is already loaded. Run Bonsai in a fresh process "
+                "so Prism's pinned packed-transformer runtime can be activated."
+            )
+    if not prism_source.is_dir():
+        raise RuntimeError(
+            "Pinned Prism MFLUX source is not installed at "
+            f"{prism_source}. Install revision {PRISM_MFLUX_REVISION}."
+        )
+    if str(prism_source) not in sys.path:
+        sys.path.insert(0, str(prism_source))
 
     try:
         import gc

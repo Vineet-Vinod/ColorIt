@@ -66,3 +66,56 @@ def test_generate_reuses_model_and_passes_fast_defaults(tmp_path: Path, monkeypa
             "use_kv_cache": False,
         }
     ]
+
+
+def test_batch_validates_seed_count(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    Image.new("L", (64, 64), color=128).save(source)
+    colorizer = flux2.Flux2KleinMLXColorizer(tmp_path)
+    with pytest.raises(ValueError, match="one seed"):
+        colorizer.generate_batch(
+            source_images=[source],
+            prompt="Colorize this film frame.",
+            seeds=[],
+            width=64,
+            height=64,
+        )
+
+
+def test_batch_dispatches_resolved_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sources = [tmp_path / "one.png", tmp_path / "two.png"]
+    for source in sources:
+        Image.new("L", (64, 64), color=128).save(source)
+    fake_model = object()
+    calls = []
+    colorizer = flux2.Flux2KleinMLXColorizer(tmp_path)
+    monkeypatch.setattr(colorizer, "_get_model", lambda: fake_model)
+
+    def fake_batch(model, **kwargs):
+        calls.append((model, kwargs))
+        return [Image.new("RGB", (64, 64)) for _ in sources]
+
+    monkeypatch.setattr(flux2, "_generate_batch_mflux", fake_batch)
+    results = colorizer.generate_batch(
+        source_images=sources,
+        prompt="Colorize this film frame.",
+        seeds=[10, 11],
+        width=64,
+        height=64,
+    )
+
+    assert len(results) == 2
+    assert calls == [
+        (
+            fake_model,
+            {
+                "source_images": [source.resolve() for source in sources],
+                "prompt": "Colorize this film frame.",
+                "seeds": [10, 11],
+                "width": 64,
+                "height": 64,
+                "steps": 4,
+                "guidance": 1.0,
+            },
+        )
+    ]

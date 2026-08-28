@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import mlx.core as mx
+import numpy as np
 from PIL import Image
 
 from src.pipeline.weights import download_file, verify_file
@@ -184,6 +186,46 @@ class Flux2KleinMLXColorizer:
             raise TypeError("MFLUX returned an unexpected FLUX.2 image result")
         return image.convert("RGB")
 
+    def generate_batch(
+        self,
+        *,
+        source_images: list[Path],
+        prompt: str,
+        seeds: list[int],
+        width: int,
+        height: int,
+    ) -> list[Image.Image]:
+        """Generate independent same-prompt edits in one MLX batch.
+
+        MFLUX's public edit API treats a list of images as multiple references
+        for one output. This path instead batches independent source images,
+        sharing text encoding and compiled denoiser evaluations while retaining
+        one conditioning image and seed per output.
+        """
+
+        if not source_images:
+            raise ValueError("FLUX.2 batch requires at least one source image")
+        if len(source_images) != len(seeds):
+            raise ValueError("FLUX.2 batch requires one seed per source image")
+        if not prompt.strip():
+            raise ValueError("FLUX.2 requires a non-empty editing prompt")
+        if width < 64 or height < 64:
+            raise ValueError("width and height must both be at least 64 pixels")
+        sources = [path.expanduser().resolve() for path in source_images]
+        for source in sources:
+            if not source.is_file():
+                raise FileNotFoundError(f"Source image not found: {source}")
+        return _generate_batch_mflux(
+            self._get_model(),
+            source_images=sources,
+            prompt=prompt,
+            seeds=seeds,
+            width=width,
+            height=height,
+            steps=self.options.steps,
+            guidance=self.options.guidance,
+        )
+
     def _get_model(self) -> Any:
         if self._model is None:
             verify_flux2_klein_4b_weights(self.model_dir)
@@ -204,6 +246,140 @@ def _mflux_flux2_edit_factory() -> Callable[..., Any]:
             "Install the project's image-edit extra before running this adapter."
         ) from exc
     return Flux2KleinEdit
+
+
+def _generate_batch_mflux(
+    model: Any,
+    *,
+    source_images: list[Path],
+    prompt: str,
+    seeds: list[int],
+    width: int,
+    height: int,
+    steps: int,
+    guidance: float,
+) -> list[Image.Image]:
+    """Native MLX batch implementation for pinned MFLUX 0.19.1."""
+
+    try:
+        from mflux.models.common.config.config import Config
+        from mflux.models.common.vae.vae_util import VAEUtil
+        from mflux.models.flux2.latent_creator.flux2_latent_creator import Flux2LatentCreator
+        from mflux.models.flux2.variants.edit.flux2_klein_edit_helpers import (
+            _Flux2KleinEditHelpers,
+        )
+        from mflux.utils.image_util import ImageUtil
+    except ImportError as exc:  # pragma: no cover - guarded by optional extra.
+        raise RuntimeError(
+            f"FLUX.2 MLX batching requires mflux=={MFLUX_VERSION}"
+        ) from exc
+
+    batch_size = len(source_images)
+    config = Config(
+        model_config=model.model_config,
+        num_inference_steps=steps,
+        height=height,
+        width=width,
+        guidance=guidance,
+        scheduler="flow_match_euler_discrete",
+    )
+    prompt_embeds, text_ids, negative_prompt_embeds, negative_text_ids = (
+        model._encode_prompt_pair(
+            prompt=prompt,
+            negative_prompt=" ",
+            guidance=guidance,
+        )
+    )
+
+    def broadcast_batch(array: Any | None) -> Any | None:
+        if array is None or array.shape[0] == batch_size:
+            return array
+        if array.shape[0] != 1:
+            raise ValueError("FLUX.2 conditioning batch cannot be broadcast")
+        return mx.broadcast_to(array, (batch_size, *array.shape[1:]))
+
+    prompt_embeds = broadcast_batch(prompt_embeds)
+    text_ids = broadcast_batch(text_ids)
+    negative_prompt_embeds = broadcast_batch(negative_prompt_embeds)
+    negative_text_ids = broadcast_batch(negative_text_ids)
+
+    latent_rows = []
+    latent_ids = None
+    latent_height = 0
+    latent_width = 0
+    for seed in seeds:
+        row, row_ids, latent_height, latent_width = Flux2LatentCreator.prepare_packed_latents(
+            seed=seed,
+            height=config.height,
+            width=config.width,
+            batch_size=1,
+        )
+        latent_rows.append(row)
+        if latent_ids is None:
+            latent_ids = row_ids
+    latents = mx.concatenate(latent_rows, axis=0)
+    assert latent_ids is not None
+    latent_ids = mx.broadcast_to(latent_ids, (batch_size, *latent_ids.shape[1:]))
+
+    prepared_images = [
+        _Flux2KleinEditHelpers.prepare_reference_image(ImageUtil.load_image(path))
+        for path in source_images
+    ]
+    reference_sizes = {(image.width, image.height) for image in prepared_images}
+    if len(reference_sizes) != 1:
+        raise ValueError("FLUX.2 batch source images must resolve to one reference size")
+    reference_arrays = mx.concatenate([ImageUtil.to_array(image) for image in prepared_images], axis=0)
+    encoded = VAEUtil.encode(
+        vae=model.vae,
+        image=reference_arrays,
+        tiling_config=model.tiling_config,
+    )
+    encoded = _Flux2KleinEditHelpers.ensure_4d_latents(encoded)
+    encoded = _Flux2KleinEditHelpers.crop_to_even_spatial(encoded)
+    encoded = Flux2LatentCreator.patchify_latents(encoded)
+    encoded = _Flux2KleinEditHelpers.bn_normalize_vae_encoded_latents(encoded, vae=model.vae)
+    image_latents = Flux2LatentCreator.pack_latents(encoded)
+    image_latent_ids = Flux2LatentCreator.prepare_grid_ids(encoded, t_coord=10)
+
+    predict = model._predict(model.transformer)
+    for timestep in config.time_steps:
+        noise = predict(
+            latents=latents,
+            image_latents=image_latents,
+            latent_ids=latent_ids,
+            image_latent_ids=image_latent_ids,
+            prompt_embeds=prompt_embeds,
+            text_ids=text_ids,
+            negative_prompt_embeds=negative_prompt_embeds,
+            negative_text_ids=negative_text_ids,
+            guidance=guidance,
+            timestep=config.scheduler.timesteps[timestep],
+        )
+        latents = config.scheduler.step(
+            noise=noise,
+            timestep=timestep,
+            latents=latents,
+            sigmas=config.scheduler.sigmas,
+        )
+        mx.eval(latents)
+
+    packed = latents.reshape(
+        batch_size,
+        latent_height,
+        latent_width,
+        latents.shape[-1],
+    ).transpose(0, 3, 1, 2)
+    decoded = model.vae.decode_packed_latents(packed)
+    mx.eval(decoded)
+    decoded_array = np.asarray(decoded.astype(mx.float32))
+    if decoded_array.ndim == 5 and decoded_array.shape[2] == 1:
+        decoded_array = np.squeeze(decoded_array, axis=2)
+    decoded_array = np.transpose(decoded_array, (0, 2, 3, 1))
+    decoded_array = np.clip(decoded_array / 2.0 + 0.5, 0.0, 1.0)
+    return [
+        Image.fromarray(np.rint(image * 255.0).astype(np.uint8))
+        for image in decoded_array
+    ]
 
 
 def _build_parser() -> argparse.ArgumentParser:

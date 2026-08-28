@@ -252,6 +252,49 @@ class SourceReferenceAttention(_Module):
             self._to_tokens(self.value(reference)),
         )
 
+    def reference_importance(
+        self,
+        source: Any,
+        projected_key: Any,
+        *,
+        reference_count: int,
+    ) -> Any:
+        """Return exact per-source-pixel probability mass for each reference.
+
+        DeepRemaster flattens every reference's spatial tokens before applying
+        one softmax. Grouping that probability mass back by reference produces
+        the opacity signal shown in the authors' demo videos without changing
+        inference. The returned layout is ``N,T,H,W,R``.
+        """
+
+        _require_volume("source", source, self.query.weight.shape[-1])
+        if projected_key.ndim != 3:
+            raise ValueError("Projected attention keys must have N,R,C shape")
+        if reference_count < 1:
+            raise ValueError("Reference count must be positive")
+        if source.shape[0] != projected_key.shape[0]:
+            raise ValueError("Source and reference attention batches must match")
+        if projected_key.shape[-1] != self.query.weight.shape[0]:
+            raise ValueError("Projected attention key channels do not match the query")
+        if projected_key.shape[1] % reference_count:
+            raise ValueError("Reference tokens cannot be divided evenly by reference count")
+
+        query_volume = self.query(source)
+        batch, temporal, height, width, channels = query_volume.shape
+        query = query_volume.reshape((batch, temporal, height * width, channels))
+        tokens_per_reference = projected_key.shape[1] // reference_count
+        group_log_masses = []
+        for reference_index in range(reference_count):
+            start = reference_index * tokens_per_reference
+            end = start + tokens_per_reference
+            scores = mx.matmul(
+                query,
+                mx.swapaxes(projected_key[:, start:end, :], -1, -2)[:, None, :, :],
+            )
+            group_log_masses.append(mx.logsumexp(scores, axis=-1))
+        importance = mx.softmax(mx.stack(group_log_masses, axis=-1), axis=-1)
+        return importance.reshape((batch, temporal, height, width, reference_count))
+
     def __call__(
         self,
         source: Any,

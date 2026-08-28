@@ -60,8 +60,6 @@ class ImageEditWeightsTest(unittest.TestCase):
         self.assertEqual(
             {model.name for model in automatic},
             {
-                "bonsai_image_binary_4b_mlx_1bit",
-                "bonsai_image_ternary_4b_mlx_2bit",
                 "firered_image_edit_1_1",
                 "flux2_klein_4b",
                 "qwen_image_edit_2511",

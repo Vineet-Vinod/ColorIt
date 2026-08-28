@@ -41,6 +41,7 @@ class ImageEditKeyframeOptions:
     prompt: str = DEFAULT_COLORIZE_PROMPT
     palette_anchor: bool = False
     palette_prompt: str = DEFAULT_PALETTE_PROMPT
+    align_reference_luma: bool = True
 
     @classmethod
     def from_settings(cls, settings: object) -> "ImageEditKeyframeOptions":
@@ -57,6 +58,7 @@ class ImageEditKeyframeOptions:
             prompt=str(raw.get("prompt", DEFAULT_COLORIZE_PROMPT)),
             palette_anchor=bool(raw.get("palette_anchor", False)),
             palette_prompt=str(raw.get("palette_prompt", DEFAULT_PALETTE_PROMPT)),
+            align_reference_luma=bool(raw.get("align_reference_luma", True)),
         )
         options.validate()
         return options

@@ -48,6 +48,7 @@ class KeyframeRecord:
     colored_path: str
     time_seconds: float
     runtime_seconds: float
+    reference_path: str | None = None
     scene_relative_position: float = 0.5
     reused: bool = False
 
@@ -156,6 +157,7 @@ class KeyframeColorizer:
         clip_path: Path,
         source_dir: Path,
         colored_dir: Path,
+        reference_dir: Path | None = None,
         positions: object,
         reuse_existing: bool,
     ) -> list[KeyframeRecord]:
@@ -172,15 +174,31 @@ class KeyframeColorizer:
         last_frame_time = max(0.0, duration_seconds - 1.0 / max(fps, 1.0))
         source_dir.mkdir(parents=True, exist_ok=True)
         colored_dir.mkdir(parents=True, exist_ok=True)
+        align_reference_luma = (
+            self.model_name in IMAGE_EDIT_KEYFRAME_MODELS
+            and self.image_edit_options.align_reference_luma
+        )
+        if reference_dir is None:
+            reference_dir = colored_dir.parent / "references"
+        if align_reference_luma:
+            reference_dir.mkdir(parents=True, exist_ok=True)
 
         records: list[KeyframeRecord | None] = [None] * len(normalized)
-        pending: list[tuple[int, float, float, Path, Path, float]] = []
+        pending: list[tuple[int, float, float, Path, Path, Path, float]] = []
         for index, position in enumerate(normalized):
             stem = _keyframe_stem(scene_id, position, len(normalized))
             source_path = source_dir / f"{stem}.png"
             colored_path = colored_dir / f"{stem}.png"
+            reference_path = (
+                reference_dir / f"{stem}.png" if align_reference_luma else colored_path
+            )
             time_seconds = min(duration_seconds * position, last_frame_time)
-            if reuse_existing and _is_usable_image(source_path) and _is_usable_image(colored_path):
+            if (
+                reuse_existing
+                and _is_usable_image(source_path)
+                and _is_usable_image(colored_path)
+                and _is_usable_image(reference_path)
+            ):
                 records[index] = KeyframeRecord(
                     scene_id=scene_id,
                     model=self.model_name,
@@ -188,6 +206,7 @@ class KeyframeColorizer:
                     colored_path=str(colored_path),
                     time_seconds=round(time_seconds, 6),
                     runtime_seconds=0.0,
+                    reference_path=str(reference_path),
                     scene_relative_position=position,
                     reused=True,
                 )
@@ -206,6 +225,7 @@ class KeyframeColorizer:
                     time_seconds,
                     source_path,
                     colored_path,
+                    reference_path,
                     time.perf_counter() - started,
                 )
             )
@@ -216,6 +236,13 @@ class KeyframeColorizer:
                 source_paths=[item[3] for item in pending],
                 colored_paths=[item[4] for item in pending],
             )
+            for item in pending:
+                if item[5] != item[4]:
+                    _write_source_luma_reference(
+                        source_path=item[3],
+                        colored_path=item[4],
+                        output_path=item[5],
+                    )
             color_share = (time.perf_counter() - color_started) / len(pending)
             for (
                 index,
@@ -223,6 +250,7 @@ class KeyframeColorizer:
                 time_seconds,
                 source_path,
                 colored_path,
+                reference_path,
                 extraction_seconds,
             ) in pending:
                 records[index] = KeyframeRecord(
@@ -232,6 +260,7 @@ class KeyframeColorizer:
                     colored_path=str(colored_path),
                     time_seconds=round(time_seconds, 6),
                     runtime_seconds=round(extraction_seconds + color_share, 6),
+                    reference_path=str(reference_path),
                     scene_relative_position=position,
                 )
 
@@ -292,7 +321,7 @@ class KeyframeColorizer:
             Image.fromarray(cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB)).save(colored_path)
 
 
-def keyframe_record_to_dict(record: KeyframeRecord) -> dict[str, str | float | bool]:
+def keyframe_record_to_dict(record: KeyframeRecord) -> dict[str, str | float | bool | None]:
     return asdict(record)
 
 
@@ -308,3 +337,31 @@ def _read_image(path: Path):
     if image is None:
         raise ValueError(f"Failed to read extracted keyframe: {path}")
     return image
+
+
+def _write_source_luma_reference(
+    *,
+    source_path: Path,
+    colored_path: Path,
+    output_path: Path,
+) -> None:
+    """Align a generative reference's luminance to the exact source frame.
+
+    The raw editor output remains untouched for review. DeepRemaster receives
+    this separate image because its training references were real frames from
+    the source videos, not geometrically redrawn edits.
+    """
+    source = _read_image(source_path)
+    colored = _read_image(colored_path)
+    if colored.shape[:2] != source.shape[:2]:
+        colored = cv2.resize(
+            colored,
+            (source.shape[1], source.shape[0]),
+            interpolation=cv2.INTER_LANCZOS4,
+        )
+    source_lab = cv2.cvtColor(source, cv2.COLOR_BGR2LAB)
+    colored_lab = cv2.cvtColor(colored, cv2.COLOR_BGR2LAB)
+    colored_lab[:, :, 0] = source_lab[:, :, 0]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(output_path), cv2.cvtColor(colored_lab, cv2.COLOR_LAB2BGR)):
+        raise RuntimeError(f"Failed to write source-luma DeepRemaster reference: {output_path}")

@@ -83,6 +83,7 @@ def run_colorize_batch(
     equalized_output_dir = paths.colorized_dir / "clahe" / run_id
     keyframe_source_dir = paths.colorized_dir / "keyframes" / coloring_model / run_id / "source"
     keyframe_colored_dir = paths.colorized_dir / "keyframes" / coloring_model / run_id / "colored"
+    keyframe_reference_dir = paths.colorized_dir / "keyframes" / coloring_model / run_id / "references"
     for directory in (
         scene_output_dir,
         colorized_output_dir,
@@ -91,6 +92,7 @@ def run_colorize_batch(
         equalized_output_dir,
         keyframe_source_dir,
         keyframe_colored_dir,
+        keyframe_reference_dir,
     ):
         directory.mkdir(parents=True, exist_ok=True)
     cleanup_scene_clips = bool(config.raw.get("runtime", {}).get("cleanup_scene_clips", True))
@@ -149,6 +151,7 @@ def run_colorize_batch(
             equalized_output_dir=equalized_output_dir,
             keyframe_source_dir=keyframe_source_dir,
             keyframe_colored_dir=keyframe_colored_dir,
+            keyframe_reference_dir=keyframe_reference_dir,
             scene_extraction_manifest_path=scene_extraction_manifest_path,
         )
         batch_payload["scene_runs"] = []
@@ -254,6 +257,7 @@ def run_colorize_batch(
                     clip_path=scene_clip_path,
                     source_dir=keyframe_source_dir,
                     colored_dir=keyframe_colored_dir,
+                    reference_dir=keyframe_reference_dir,
                     positions=keyframe_positions,
                     reuse_existing=resume,
                 )
@@ -261,7 +265,10 @@ def run_colorize_batch(
                 for keyframe_record in keyframe_records:
                     if keyframe_record.reused:
                         print(f"Reusing {coloring_model} keyframe: {Path(keyframe_record.colored_path).name}")
-                keyframe_paths = [Path(record.colored_path) for record in keyframe_records]
+                keyframe_paths = [
+                    Path(record.reference_path or record.colored_path)
+                    for record in keyframe_records
+                ]
 
                 if deepremaster_runner is None:
                     precision = str(deepremaster_settings.get("precision", "float16"))
@@ -598,6 +605,7 @@ def _invalidate_scene_artifacts(
     equalized_output_dir: Path,
     keyframe_source_dir: Path,
     keyframe_colored_dir: Path,
+    keyframe_reference_dir: Path,
     scene_extraction_manifest_path: Path,
 ) -> None:
     for scene in scenes:
@@ -612,7 +620,7 @@ def _invalidate_scene_artifacts(
             candidate = directory / f"{scene_id}.mp4"
             if candidate.exists():
                 candidate.unlink()
-        for directory in (keyframe_source_dir, keyframe_colored_dir):
+        for directory in (keyframe_source_dir, keyframe_colored_dir, keyframe_reference_dir):
             for candidate in (directory / f"{scene_id}.png", *directory.glob(f"{scene_id}__p*.png")):
                 if candidate.exists():
                     candidate.unlink()

@@ -60,6 +60,7 @@ class BonsaiImageMLXTest(unittest.TestCase):
             self.assertEqual(made[0].loaded, 1)
             self.assertEqual(made[0].calls[0]["image_paths"], [source.resolve()])
             self.assertEqual(made[0].calls[0]["num_inference_steps"], 4)
+            self.assertEqual(colorizer.kernel_mode, "prism_native")
 
 
 if __name__ == "__main__":

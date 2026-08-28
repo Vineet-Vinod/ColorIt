@@ -69,6 +69,11 @@ class BonsaiImageMLXColorizer:
     def warmup(self) -> None:
         self._get_model()
 
+    @property
+    def kernel_mode(self) -> str:
+        model = self._get_model()
+        return str(getattr(model, "_colorit_kernel_mode", "prism_native"))
+
     def generate(
         self,
         *,
@@ -135,6 +140,7 @@ def _prism_edit_factory() -> Callable[..., Any]:
         from mflux.models.common.weights.loading.weight_loader import WeightLoader
         from mflux.models.flux2.flux2_initializer import FULL_DECODER_CHANNELS, Flux2Initializer
         from mflux.models.flux2.model.flux2_text_encoder.qwen3_text_encoder import Qwen3TextEncoder
+        from mflux.models.flux2.model.flux2_transformer.klein_fast import blocks as fast_blocks
         from mflux.models.flux2.model.flux2_vae.vae import Flux2VAE
         from mflux.models.flux2.variants.edit.flux2_klein_edit import Flux2KleinEdit
         from mflux.models.flux2.weights.flux2_weight_definition import Flux2KleinWeightDefinition
@@ -143,6 +149,54 @@ def _prism_edit_factory() -> Callable[..., Any]:
             "Bonsai Image requires the isolated Prism MLX/MFLUX runtime pinned "
             f"to {PRISM_MLX_REVISION[:8]} and {PRISM_MFLUX_REVISION[:8]}."
         ) from exc
+
+    def install_one_bit_fallback() -> bool:
+        """Use cached MLX dequantization when Prism's native 1-bit op is absent.
+
+        The fallback is numerically the same affine 1-bit checkpoint. It keeps
+        dequantized bfloat16 matrices resident after their first use, trading
+        memory for much faster subsequent denoising steps. This is only needed
+        on machines without a build of Prism's MLX fork.
+        """
+
+        try:
+            fast_blocks._require_native_quantized_matmul(1, 128)
+            return False
+        except RuntimeError:
+            pass
+
+        original_require = fast_blocks._require_native_quantized_matmul
+        original_call = fast_blocks.QuantizedLinearKernel.__call__
+
+        def require_native(bits: int, group_size: int) -> None:
+            if bits == 1:
+                return
+            original_require(bits, group_size)
+
+        def low_bit_call(kernel: Any, value: Any) -> Any:
+            if kernel.bits != 1:
+                return original_call(kernel, value)
+            dense = getattr(kernel, "_colorit_dense_weight", None)
+            if dense is None:
+                shifts = mx.arange(32, dtype=mx.uint32)
+                unpacked = ((kernel.packed_weight[..., None] >> shifts) & 1).reshape(
+                    kernel.packed_weight.shape[0], -1
+                )
+                scales = mx.repeat(kernel.scales, kernel.group_size, axis=1)
+                biases = mx.repeat(kernel.biases, kernel.group_size, axis=1)
+                dense = (unpacked.astype(mx.bfloat16) * scales + biases).astype(mx.bfloat16)
+                mx.eval(dense)
+                kernel._colorit_dense_weight = dense
+            original_shape = value.shape
+            flat = value.reshape((-1, value.shape[-1])).astype(mx.bfloat16)
+            output = flat @ dense.transpose()
+            return output.reshape((*original_shape[:-1], dense.shape[0]))
+
+        fast_blocks._require_native_quantized_matmul = require_native
+        fast_blocks.QuantizedLinearKernel.__call__ = low_bit_call
+        return True
+
+    binary_fallback = install_one_bit_fallback()
 
     def load_text_encoder(model: Any) -> None:
         root = Path(model._model_path) / "text_encoder-mlx-4bit"
@@ -210,6 +264,11 @@ def _prism_edit_factory() -> Callable[..., Any]:
                 lazy_components=False,
                 bucketed_seq_len=False,
             )
+            self._colorit_kernel_mode = (
+                "mlx_cached_bfloat16_fallback"
+                if precision == "1bit" and binary_fallback
+                else "prism_native_packed"
+            )
 
         def load_transformer_and_vae(self) -> None:
             load_transformer_and_vae(self)
@@ -264,6 +323,7 @@ def main() -> int:
                     "height": args.height,
                     "steps": 4,
                     "guidance": 1.0,
+                    "kernel_mode": colorizer.kernel_mode,
                 },
                 indent=2,
                 sort_keys=True,

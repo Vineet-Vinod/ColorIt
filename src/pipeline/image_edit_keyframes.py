@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+import re
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 
 IMAGE_EDIT_KEYFRAME_MODELS = (
@@ -32,6 +33,15 @@ DEFAULT_PALETTE_PROMPT = (
     "second frame's geometry."
 )
 
+DEFAULT_PALETTE_CARD_PROMPT = (
+    "The first image is the exact black-and-white source frame. The second image is only a "
+    "labeled color palette card, not a scene or composition. Apply each labeled swatch only "
+    "to the named person, garment, or material. Preserve every source face, body, pose, "
+    "object, edge, composition, lighting value, and film texture exactly. Never put garment "
+    "color on skin, hair, another person, or the background. Do not copy any shape or layout "
+    "from the palette card."
+)
+
 
 @dataclass(frozen=True)
 class ImageEditKeyframeOptions:
@@ -47,6 +57,8 @@ class ImageEditKeyframeOptions:
     prompt: str = DEFAULT_COLORIZE_PROMPT
     palette_anchor: bool = False
     palette_prompt: str = DEFAULT_PALETTE_PROMPT
+    palette_card_prompt: str = DEFAULT_PALETTE_CARD_PROMPT
+    scene_palettes: dict[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
     align_reference_luma: bool = True
 
     @classmethod
@@ -65,6 +77,8 @@ class ImageEditKeyframeOptions:
             prompt=str(raw.get("prompt", DEFAULT_COLORIZE_PROMPT)),
             palette_anchor=bool(raw.get("palette_anchor", False)),
             palette_prompt=str(raw.get("palette_prompt", DEFAULT_PALETTE_PROMPT)),
+            palette_card_prompt=str(raw.get("palette_card_prompt", DEFAULT_PALETTE_CARD_PROMPT)),
+            scene_palettes=_parse_scene_palettes(raw.get("scene_palettes", {})),
             align_reference_luma=bool(raw.get("align_reference_luma", True)),
         )
         options.validate()
@@ -84,7 +98,7 @@ class ImageEditKeyframeOptions:
             raise ValueError("DeepRemaster image_edit.flux_batch_size must be positive")
         if self.qwen_guidance < 0:
             raise ValueError("DeepRemaster image_edit.qwen_guidance must be non-negative")
-        if not self.prompt.strip() or not self.palette_prompt.strip():
+        if not self.prompt.strip() or not self.palette_prompt.strip() or not self.palette_card_prompt.strip():
             raise ValueError("DeepRemaster image edit prompts must not be empty")
 
 
@@ -103,6 +117,10 @@ class ImageEditKeyframeColorizer:
         if len(source_paths) != len(colored_paths):
             raise ValueError("Source and output keyframe counts must match")
         if not source_paths:
+            return
+        palette = self.options.scene_palettes.get(_scene_id_from_output(colored_paths[0]))
+        if self.model_name == "flux2_klein_4b" and palette:
+            self._colorize_flux_palette_card_batches(source_paths, colored_paths, palette)
             return
         if self.model_name == "flux2_klein_4b" and self.options.palette_anchor and len(source_paths) > 1:
             self._colorize_flux_palette_bank(source_paths, colored_paths)
@@ -128,6 +146,37 @@ class ImageEditKeyframeColorizer:
             )
             if len(images) != len(outputs):
                 raise RuntimeError("FLUX.2 batch returned an unexpected image count")
+            for image, output in zip(images, outputs, strict=True):
+                if not isinstance(image, Image.Image):
+                    raise TypeError("flux2_klein_4b returned a non-image keyframe")
+                output.parent.mkdir(parents=True, exist_ok=True)
+                image.convert("RGB").save(output)
+
+    def _colorize_flux_palette_card_batches(
+        self,
+        source_paths: list[Path],
+        colored_paths: list[Path],
+        palette: tuple[tuple[str, str], ...],
+    ) -> None:
+        scene_id = _scene_id_from_output(colored_paths[0])
+        card = colored_paths[0].parent / f"{scene_id}__palette.png"
+        _write_palette_card(palette, card)
+        assignments = " ".join(f"{label} uses {color}." for label, color in palette)
+        prompt = f"{self.options.palette_card_prompt} {assignments}"
+        runner = self._get_runner()
+        for offset in range(0, len(source_paths), self.options.flux_batch_size):
+            sources = source_paths[offset : offset + self.options.flux_batch_size]
+            outputs = colored_paths[offset : offset + self.options.flux_batch_size]
+            images = runner.generate_batch(
+                source_images=sources,
+                reference_images=[card],
+                prompt=prompt,
+                seeds=[self.options.seed] * len(sources),
+                width=self.options.width,
+                height=self.options.height,
+            )
+            if len(images) != len(outputs):
+                raise RuntimeError("FLUX.2 palette-card batch returned an unexpected image count")
             for image, output in zip(images, outputs, strict=True):
                 if not isinstance(image, Image.Image):
                     raise TypeError("flux2_klein_4b returned a non-image keyframe")
@@ -259,3 +308,49 @@ def keyframe_model_fingerprint(model: str) -> str:
 
         return f"{FIRERED_REVISION}:mflux-{MFLUX_VERSION}"
     return f"legacy-{model}-v1"
+
+
+def _parse_scene_palettes(value: object) -> dict[str, tuple[tuple[str, str], ...]]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("DeepRemaster image_edit.scene_palettes must be a mapping")
+    parsed = {}
+    for scene_id, entries in value.items():
+        if not isinstance(scene_id, str) or not scene_id.strip():
+            raise ValueError("DeepRemaster scene palette ids must be non-empty strings")
+        if not isinstance(entries, list) or not entries:
+            raise ValueError(f"DeepRemaster scene palette {scene_id!r} must be a non-empty list")
+        materials = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ValueError(f"DeepRemaster scene palette {scene_id!r} entries must be mappings")
+            label = str(entry.get("label", "")).strip()
+            color = str(entry.get("color", "")).strip().upper()
+            if not label:
+                raise ValueError(f"DeepRemaster scene palette {scene_id!r} has an empty label")
+            if re.fullmatch(r"#[0-9A-F]{6}", color) is None:
+                raise ValueError(
+                    f"DeepRemaster scene palette {scene_id!r} color must be #RRGGBB: {color!r}"
+                )
+            materials.append((label, color))
+        parsed[scene_id] = tuple(materials)
+    return parsed
+
+
+def _scene_id_from_output(path: Path) -> str:
+    return path.stem.split("__p", maxsplit=1)[0]
+
+
+def _write_palette_card(palette: tuple[tuple[str, str], ...], path: Path) -> None:
+    width = 512
+    row_height = 96
+    image = Image.new("RGB", (width, row_height * len(palette)), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=22)
+    for index, (label, color) in enumerate(palette):
+        top = index * row_height
+        draw.rectangle((0, top, 220, top + row_height), fill=color)
+        draw.text((240, top + 34), label.upper(), fill="black", font=font)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path)

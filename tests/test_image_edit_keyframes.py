@@ -19,6 +19,10 @@ def test_options_validate_fixed_mlx_shape() -> None:
         ImageEditKeyframeOptions.from_settings({"width": 1000, "height": 576})
     with pytest.raises(ValueError, match="flux_batch_size"):
         ImageEditKeyframeOptions.from_settings({"flux_batch_size": 0})
+    with pytest.raises(ValueError, match="#RRGGBB"):
+        ImageEditKeyframeOptions.from_settings(
+            {"scene_palettes": {"scene_0001": [{"label": "sari", "color": "red"}]}}
+        )
 
 
 def test_only_promoted_editor_is_a_public_keyframe_model(tmp_path: Path) -> None:
@@ -99,4 +103,49 @@ def test_flux_keyframes_use_bounded_batches(tmp_path: Path) -> None:
 
     assert [call["source_images"] for call in calls] == [sources[:2], sources[2:4], sources[4:]]
     assert [call["seeds"] for call in calls] == [[101, 101], [101, 101], [101]]
+    assert all(path.is_file() for path in outputs)
+
+
+def test_flux_scene_palette_uses_flat_card_in_bounded_batch(tmp_path: Path) -> None:
+    sources = []
+    outputs = []
+    for index, position in enumerate((2000, 5000, 8000)):
+        source = tmp_path / f"source-{index}.png"
+        Image.new("L", (64, 64), 100 + index).save(source)
+        sources.append(source)
+        outputs.append(tmp_path / f"scene_0001__p{position}.png")
+
+    calls = []
+
+    class FakeRunner:
+        def generate_batch(self, **kwargs):
+            calls.append(kwargs)
+            return [Image.new("RGB", (64, 64), (20, 40, 60)) for _ in kwargs["source_images"]]
+
+    options = ImageEditKeyframeOptions.from_settings(
+        {
+            "width": 64,
+            "height": 64,
+            "flux_batch_size": 2,
+            "scene_palettes": {
+                "scene_0001": [
+                    {"label": "woman sari", "color": "#8a174a"},
+                    {"label": "woman blouse", "color": "#154f55"},
+                ]
+            },
+        }
+    )
+    colorizer = ImageEditKeyframeColorizer(
+        model="flux2_klein_4b",
+        model_root=tmp_path,
+        options=options,
+    )
+    colorizer._runner = FakeRunner()
+    colorizer.colorize(sources, outputs)
+
+    card = tmp_path / "scene_0001__palette.png"
+    assert card.is_file()
+    assert [call["source_images"] for call in calls] == [sources[:2], sources[2:]]
+    assert all(call["reference_images"] == [card] for call in calls)
+    assert all("woman sari uses #8A174A" in call["prompt"] for call in calls)
     assert all(path.is_file() for path in outputs)

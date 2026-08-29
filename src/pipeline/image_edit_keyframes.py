@@ -45,7 +45,7 @@ class ImageEditKeyframeOptions:
     firered_steps: int = 20
     qwen_guidance: float = 2.5
     prompt: str = DEFAULT_COLORIZE_PROMPT
-    palette_anchor: bool = True
+    palette_anchor: bool = False
     palette_prompt: str = DEFAULT_PALETTE_PROMPT
     align_reference_luma: bool = True
 
@@ -63,7 +63,7 @@ class ImageEditKeyframeOptions:
             firered_steps=int(raw.get("firered_steps", 20)),
             qwen_guidance=float(raw.get("qwen_guidance", 2.5)),
             prompt=str(raw.get("prompt", DEFAULT_COLORIZE_PROMPT)),
-            palette_anchor=bool(raw.get("palette_anchor", True)),
+            palette_anchor=bool(raw.get("palette_anchor", False)),
             palette_prompt=str(raw.get("palette_prompt", DEFAULT_PALETTE_PROMPT)),
             align_reference_luma=bool(raw.get("align_reference_luma", True)),
         )

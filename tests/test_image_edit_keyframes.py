@@ -14,7 +14,7 @@ def test_options_validate_fixed_mlx_shape() -> None:
     options = ImageEditKeyframeOptions.from_settings({"width": 1024, "height": 576})
     assert options.seed == 101
     assert options.flux_batch_size == 8
-    assert options.palette_anchor is True
+    assert options.palette_anchor is False
     with pytest.raises(ValueError, match="multiple of 16"):
         ImageEditKeyframeOptions.from_settings({"width": 1000, "height": 576})
     with pytest.raises(ValueError, match="flux_batch_size"):

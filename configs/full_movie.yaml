@@ -30,7 +30,7 @@ deep_remaster:
     qwen_steps: 20
     firered_steps: 20
     qwen_guidance: 2.5
-    palette_anchor: true
+    palette_anchor: false
     align_reference_luma: true
   precision: float16
   min_dimension: 384

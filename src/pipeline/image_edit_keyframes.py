@@ -16,15 +16,20 @@ IMAGE_EDIT_KEYFRAME_MODELS = (
 DEFAULT_COLORIZE_PROMPT = (
     "Colorize this black-and-white archival film frame. Preserve its people, faces, "
     "costumes, objects, composition, lighting, and period photographic realism. "
-    "Use believable material colors and natural skin tones. Do not crop, redraw, "
-    "add, remove, or restyle anything."
+    "Use believable material colors, vivid costume colors, and natural skin tones. "
+    "Keep every color inside the exact source object boundary. Costume colors must "
+    "not tint skin, hair, or the surroundings. Do not crop, redraw, add, remove, or "
+    "restyle anything."
 )
 
 DEFAULT_PALETTE_PROMPT = (
     "Colorize the first black-and-white archival film frame using the exact costume, "
     "skin, object, foliage, architecture, and sky palette from the second colored frame. "
-    "The images are from the same scene. Preserve the first frame's people, faces, poses, "
-    "objects, composition, and lighting. Do not copy the second frame's geometry."
+    "The images are from the same scene. Match colors by object identity, including the "
+    "same garment across poses. Never transfer a garment color onto skin, hair, another "
+    "person, or the background. Keep color inside the first frame's exact object boundaries. "
+    "Preserve its people, faces, poses, objects, composition, and lighting. Do not copy the "
+    "second frame's geometry."
 )
 
 
@@ -40,7 +45,7 @@ class ImageEditKeyframeOptions:
     firered_steps: int = 20
     qwen_guidance: float = 2.5
     prompt: str = DEFAULT_COLORIZE_PROMPT
-    palette_anchor: bool = False
+    palette_anchor: bool = True
     palette_prompt: str = DEFAULT_PALETTE_PROMPT
     align_reference_luma: bool = True
 
@@ -58,7 +63,7 @@ class ImageEditKeyframeOptions:
             firered_steps=int(raw.get("firered_steps", 20)),
             qwen_guidance=float(raw.get("qwen_guidance", 2.5)),
             prompt=str(raw.get("prompt", DEFAULT_COLORIZE_PROMPT)),
-            palette_anchor=bool(raw.get("palette_anchor", False)),
+            palette_anchor=bool(raw.get("palette_anchor", True)),
             palette_prompt=str(raw.get("palette_prompt", DEFAULT_PALETTE_PROMPT)),
             align_reference_luma=bool(raw.get("align_reference_luma", True)),
         )
@@ -137,15 +142,29 @@ class ImageEditKeyframeColorizer:
             prompt=self.options.prompt,
         )
         anchor = colored_paths[anchor_index]
-        for index, (source, output) in enumerate(zip(source_paths, colored_paths, strict=True)):
-            if index == anchor_index:
-                continue
-            self._generate_one(
-                source=source,
-                output=output,
-                prompt=self.options.palette_prompt,
+        remaining = [
+            (source, output)
+            for index, (source, output) in enumerate(zip(source_paths, colored_paths, strict=True))
+            if index != anchor_index
+        ]
+        runner = self._get_runner()
+        for offset in range(0, len(remaining), self.options.flux_batch_size):
+            batch = remaining[offset : offset + self.options.flux_batch_size]
+            images = runner.generate_batch(
+                source_images=[source for source, _output in batch],
                 reference_images=[anchor],
+                prompt=self.options.palette_prompt,
+                seeds=[self.options.seed] * len(batch),
+                width=self.options.width,
+                height=self.options.height,
             )
+            if len(images) != len(batch):
+                raise RuntimeError("FLUX.2 palette batch returned an unexpected image count")
+            for image, (_source, output) in zip(images, batch, strict=True):
+                if not isinstance(image, Image.Image):
+                    raise TypeError("flux2_klein_4b returned a non-image keyframe")
+                output.parent.mkdir(parents=True, exist_ok=True)
+                image.convert("RGB").save(output)
 
     def _generate_one(
         self,

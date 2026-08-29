@@ -98,6 +98,7 @@ def test_batch_dispatches_resolved_sources(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(flux2, "_generate_batch_mflux", fake_batch)
     results = colorizer.generate_batch(
         source_images=sources,
+        reference_images=[sources[0]],
         prompt="Colorize this film frame.",
         seeds=[10, 11],
         width=64,
@@ -110,6 +111,7 @@ def test_batch_dispatches_resolved_sources(tmp_path: Path, monkeypatch: pytest.M
             fake_model,
             {
                 "source_images": [source.resolve() for source in sources],
+                "reference_images": [sources[0].resolve()],
                 "prompt": "Colorize this film frame.",
                 "seeds": [10, 11],
                 "width": 64,

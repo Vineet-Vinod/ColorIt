@@ -190,6 +190,7 @@ class Flux2KleinMLXColorizer:
         self,
         *,
         source_images: list[Path],
+        reference_images: list[Path] | None = None,
         prompt: str,
         seeds: list[int],
         width: int,
@@ -215,9 +216,14 @@ class Flux2KleinMLXColorizer:
         for source in sources:
             if not source.is_file():
                 raise FileNotFoundError(f"Source image not found: {source}")
+        references = [path.expanduser().resolve() for path in (reference_images or [])]
+        for reference in references:
+            if not reference.is_file():
+                raise FileNotFoundError(f"Reference image not found: {reference}")
         return _generate_batch_mflux(
             self._get_model(),
             source_images=sources,
+            reference_images=references,
             prompt=prompt,
             seeds=seeds,
             width=width,
@@ -252,6 +258,7 @@ def _generate_batch_mflux(
     model: Any,
     *,
     source_images: list[Path],
+    reference_images: list[Path] | None = None,
     prompt: str,
     seeds: list[int],
     width: int,
@@ -321,25 +328,46 @@ def _generate_batch_mflux(
     assert latent_ids is not None
     latent_ids = mx.broadcast_to(latent_ids, (batch_size, *latent_ids.shape[1:]))
 
-    prepared_images = [
-        _Flux2KleinEditHelpers.prepare_reference_image(ImageUtil.load_image(path))
-        for path in source_images
-    ]
-    reference_sizes = {(image.width, image.height) for image in prepared_images}
-    if len(reference_sizes) != 1:
-        raise ValueError("FLUX.2 batch source images must resolve to one reference size")
-    reference_arrays = mx.concatenate([ImageUtil.to_array(image) for image in prepared_images], axis=0)
-    encoded = VAEUtil.encode(
-        vae=model.vae,
-        image=reference_arrays,
-        tiling_config=model.tiling_config,
-    )
-    encoded = _Flux2KleinEditHelpers.ensure_4d_latents(encoded)
-    encoded = _Flux2KleinEditHelpers.crop_to_even_spatial(encoded)
-    encoded = Flux2LatentCreator.patchify_latents(encoded)
-    encoded = _Flux2KleinEditHelpers.bn_normalize_vae_encoded_latents(encoded, vae=model.vae)
-    image_latents = Flux2LatentCreator.pack_latents(encoded)
-    image_latent_ids = Flux2LatentCreator.prepare_grid_ids(encoded, t_coord=10)
+    def encode_images(paths: list[Path], *, broadcast: bool, t_coord: int):
+        prepared = [
+            _Flux2KleinEditHelpers.prepare_reference_image(ImageUtil.load_image(path))
+            for path in paths
+        ]
+        sizes = {(image.width, image.height) for image in prepared}
+        if len(sizes) != 1:
+            raise ValueError("FLUX.2 batch conditioning images must resolve to one reference size")
+        arrays = mx.concatenate([ImageUtil.to_array(image) for image in prepared], axis=0)
+        encoded = VAEUtil.encode(
+            vae=model.vae,
+            image=arrays,
+            tiling_config=model.tiling_config,
+        )
+        encoded = _Flux2KleinEditHelpers.ensure_4d_latents(encoded)
+        encoded = _Flux2KleinEditHelpers.crop_to_even_spatial(encoded)
+        encoded = Flux2LatentCreator.patchify_latents(encoded)
+        encoded = _Flux2KleinEditHelpers.bn_normalize_vae_encoded_latents(encoded, vae=model.vae)
+        packed = Flux2LatentCreator.pack_latents(encoded)
+        ids = Flux2LatentCreator.prepare_grid_ids(encoded, t_coord=t_coord)
+        if broadcast:
+            packed = mx.broadcast_to(packed, (batch_size, *packed.shape[1:]))
+            ids = mx.broadcast_to(ids, (batch_size, *ids.shape[1:]))
+        return packed, ids
+
+    conditioning_latents = []
+    conditioning_ids = []
+    source_latents, source_ids = encode_images(source_images, broadcast=False, t_coord=10)
+    conditioning_latents.append(source_latents)
+    conditioning_ids.append(source_ids)
+    for index, reference in enumerate(reference_images or [], start=2):
+        shared_latents, shared_ids = encode_images(
+            [reference],
+            broadcast=True,
+            t_coord=index * 10,
+        )
+        conditioning_latents.append(shared_latents)
+        conditioning_ids.append(shared_ids)
+    image_latents = mx.concatenate(conditioning_latents, axis=1)
+    image_latent_ids = mx.concatenate(conditioning_ids, axis=1)
 
     predict = model._predict(model.transformer)
     for timestep in config.time_steps:

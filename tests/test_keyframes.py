@@ -2,6 +2,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from src.pipeline.keyframes import _write_source_luma_reference
 
@@ -41,3 +42,31 @@ def test_source_luma_reference_keeps_generated_chroma_and_raw_image(tmp_path: Pa
     ).mean() < 8.0
     assert reference_lab[:, :, 1:].std(axis=(0, 1)).max() <= 3.0
     assert colored_path.read_bytes() == colored_before
+
+
+def test_source_luma_reference_rejects_large_geometry_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_path = tmp_path / "source.png"
+    colored_path = tmp_path / "colored.png"
+    output_path = tmp_path / "reference.png"
+    image = np.full((32, 32, 3), 128, dtype=np.uint8)
+    assert cv2.imwrite(str(source_path), image)
+    assert cv2.imwrite(str(colored_path), image)
+
+    class FakeFlow:
+        def setUseSpatialPropagation(self, _enabled: bool) -> None:
+            return None
+
+        def calc(self, source, _colored, _initial):
+            return np.full((*source.shape, 2), 20.0, dtype=np.float32)
+
+    monkeypatch.setattr(cv2, "DISOpticalFlow_create", lambda _preset: FakeFlow())
+    with pytest.raises(RuntimeError, match="changed the source geometry"):
+        _write_source_luma_reference(
+            source_path=source_path,
+            colored_path=colored_path,
+            output_path=output_path,
+        )
+    assert not output_path.exists()

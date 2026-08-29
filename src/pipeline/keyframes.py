@@ -7,6 +7,7 @@ from pathlib import Path
 import time
 
 import cv2
+import numpy as np
 from PIL import Image
 
 from src.pipeline.config import AppConfig
@@ -345,7 +346,7 @@ def _write_source_luma_reference(
     colored_path: Path,
     output_path: Path,
 ) -> None:
-    """Align a generative reference's luminance to the exact source frame.
+    """Align a generative reference's chroma and luminance to the exact source frame.
 
     The raw editor output remains untouched for review. DeepRemaster receives
     this separate image because its training references were real frames from
@@ -359,6 +360,36 @@ def _write_source_luma_reference(
             (source.shape[1], source.shape[0]),
             interpolation=cv2.INTER_LANCZOS4,
         )
+    source_gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
+    colored_gray = cv2.cvtColor(colored, cv2.COLOR_BGR2GRAY)
+    flow_estimator = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+    flow_estimator.setUseSpatialPropagation(True)
+    flow = flow_estimator.calc(source_gray, colored_gray, None)
+    flow_magnitude = np.linalg.norm(flow, axis=2)
+    median_flow = float(np.median(flow_magnitude))
+    if median_flow > 12.0:
+        raise RuntimeError(
+            "Generated keyframe changed the source geometry too much "
+            f"(median displacement {median_flow:.1f}px; limit 12.0px): {colored_path}"
+        )
+
+    # Trust small local corrections and fade out large, ambiguous matches. This
+    # fixes color fringes from a slightly redrawn edge without dragging chroma
+    # across a person or object when the editor hallucinated different content.
+    confidence = np.clip((32.0 - flow_magnitude) / 16.0, 0.0, 1.0).astype(np.float32)
+    trusted_flow = flow * confidence[:, :, None]
+    height, width = source_gray.shape
+    grid_x, grid_y = np.meshgrid(
+        np.arange(width, dtype=np.float32),
+        np.arange(height, dtype=np.float32),
+    )
+    colored = cv2.remap(
+        colored,
+        grid_x + trusted_flow[:, :, 0],
+        grid_y + trusted_flow[:, :, 1],
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REFLECT101,
+    )
     source_lab = cv2.cvtColor(source, cv2.COLOR_BGR2LAB)
     colored_lab = cv2.cvtColor(colored, cv2.COLOR_BGR2LAB)
     colored_lab[:, :, 0] = source_lab[:, :, 0]

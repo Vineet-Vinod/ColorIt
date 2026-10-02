@@ -10,7 +10,9 @@ No new branch or worktree. Generated media and logs are in
   tested family, but default resolution, reference memory and shot resets differ.
 - FCTCVC completed 750 frames at 25 fps using its released 15-frame configuration.
   Both window endpoints receive aligned colors from the approved CMNET2 output.
-  This is a propagation test with 118 supplied colored frames.
+  This is a propagation test with dense supplied colored frames. The original
+  scene manifest missed three transitions; the final run uses verified boundaries
+  in `scene_manifest.json`.
 - LTX-2.5 is **blocked by Hugging Face access**, including the colorization adapter.
   Its local pipeline imports, MLX block port and numerical tests pass. Full trained
   weights, end-to-end parity, actual runtime and output quality remain untested.
@@ -59,12 +61,12 @@ PYTORCH_ENABLE_MPS_FALLBACK=1 PYTHONPATH="$PWD" \
   --anchors tmp/cmnet2_flux_gpu/deep_rem_flux_cmnet2_gpu_180s.mp4 \
   --checkpoint data/adapter_compare_90_120/fctcvc-checkpoint \
   --upstream tmp/adapter_compare_90_120/upstream/FCTCVC \
-  --scene-manifest tmp/author_reference_cpu/references_manifest.json \
-  --output tmp/adapter_compare_90_120/fctcvc_90_120.mp4
+  --scene-manifest experiments/adapter_compare/scene_manifest.json \
+  --output tmp/adapter_compare_90_120/fctcvc_cut_aware_90_120.mp4
 ```
 
 Defaults select frames 2250–2999, 683×384 internal size, 15-frame windows with
-two frames of overlap, and reset windows at the two existing shot boundaries.
+two frames of overlap, and reset windows at five visually checked shot boundaries.
 Raw RGB predictions, timings and configuration are saved beside the video.
 
 ## LTX setup awaiting access
@@ -93,7 +95,7 @@ PYTHONPATH="$PWD" tmp/adapter_compare_90_120/env/bin/python -u \
   --source tmp/adapter_compare_90_120/source_960x544.mp4 \
   --weights data/adapter_compare_90_120/ltx25 \
   --unused-upsampler tmp/reference_video_models/ltx_colorization_weights/ltx-2.3/ltx-2.3-spatial-upscaler-x2-1.1.safetensors \
-  --scene-manifest tmp/author_reference_cpu/references_manifest.json \
+  --scene-manifest experiments/adapter_compare/scene_manifest.json \
   --prompts experiments/adapter_compare/prompts \
   --output tmp/adapter_compare_90_120/ltx25_90_120.mp4
 ```

@@ -2,7 +2,7 @@ from experiments.adapter_compare.windows import frame_windows
 
 
 def test_windows_cover_exact_frames_and_do_not_cross_cuts() -> None:
-    cuts = [1, 13, 476, 715, 749]
+    cuts = [1, 13, 141, 476, 625, 715, 744, 749]
     windows = frame_windows(750, 15, cuts)
     delivered = [
         frame

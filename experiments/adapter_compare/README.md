@@ -51,6 +51,8 @@ The released checkpoint is the public Google Drive file
 `1yK88yjcYo0AHMZPLq9qTsGuigL0CfxFb`. Save it as
 `data/adapter_compare_90_120/fctcvc-checkpoint` using gdown. It includes GMA
 weights. The runner strictly loads all `generator.*` checkpoint tensors.
+Checkpoint SHA-256 is
+`05cfb68b830643ce684255358982a35e2fb88efe51538c3ac417a47fdbb661a5`.
 
 Launch in tmux with the experiment interpreter:
 
@@ -68,6 +70,16 @@ PYTORCH_ENABLE_MPS_FALLBACK=1 PYTHONPATH="$PWD" \
 Defaults select frames 2250–2999, 683×384 internal size, 15-frame windows with
 two frames of overlap, and reset windows at five visually checked shot boundaries.
 Raw RGB predictions, timings and configuration are saved beside the video.
+`delivery.py` upsamples predicted Lab chroma and restores the original 1080p
+source luminance, using the same reconstruction as the approved CMNET2 render.
+It encodes HEVC with original audio and checks the interval's 2× file-size budget.
+
+```sh
+PYTHONPATH="$PWD" tmp/adapter_compare_90_120/env/bin/python -u \
+  -m experiments.adapter_compare.delivery --source deep_rem.mp4 \
+  --predictions tmp/adapter_compare_90_120/fctcvc_cut_aware_90_120.npy \
+  --output tmp/adapter_compare_90_120/fctcvc_1080p.mp4
+```
 
 ## LTX setup awaiting access
 

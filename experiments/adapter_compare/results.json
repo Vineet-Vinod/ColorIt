@@ -1,0 +1,120 @@
+{
+  "status": "Partial: HAVC audit and FCTCVC completed; LTX-2.5 blocked by HF access",
+  "source": {
+    "file": "deep_rem.mp4",
+    "interval_seconds": [
+      90,
+      120
+    ],
+    "frames": 750,
+    "fps": 25
+  },
+  "machine": {
+    "name": "Mac Studio M3 Ultra",
+    "gpu_cores": 60,
+    "cpu_cores": 28,
+    "memory_gib": 256
+  },
+  "fctcvc": {
+    "seconds": 526.0868395829966,
+    "fps": 1.4256201515979536,
+    "window": 15,
+    "width": 683,
+    "height": 384,
+    "max_rss_bytes": 10925850624,
+    "anchor_policy": "Aligned CMNET2 output at both ends of each window; not an independent automatic palette test",
+    "scene_manifest": "experiments/adapter_compare/scene_manifest.json"
+  },
+  "fctcvc_model_parameters": 16776091,
+  "fctcvc_checkpoint_sha256": "05cfb68b830643ce684255358982a35e2fb88efe51538c3ac417a47fdbb661a5",
+  "comparison_metrics": {
+    "frames": 750,
+    "source_interval": [
+      90,
+      120
+    ],
+    "fps": 25,
+    "cmnet2_mean_chroma": 20.306895743052166,
+    "fctcvc_mean_chroma": 20.81395481999715,
+    "fctcvc_chroma_retention_all": 1.0244927876916021,
+    "fctcvc_chroma_retention_anchor_frames": 1.0026385788361483,
+    "fctcvc_chroma_retention_interior_frames": 1.02865549414026,
+    "fctcvc_chroma_mae_vs_cmnet2": 2.08034166320165,
+    "fctcvc_luma_mae_vs_source": 0.10006867172320684,
+    "anchor_frames": 120,
+    "source_interval_packet_bytes": 8433811,
+    "delivery_budget_bytes": 16867622,
+    "metric_definition": "Chroma is mean Euclidean distance of OpenCV 8-bit Lab a/b from neutral 128; retention is frame-averaged FCT/CM ratio. CMNET2 is a visual baseline, not ground truth."
+  },
+  "fctcvc_delivery": {
+    "path": "tmp/adapter_compare_90_120/fctcvc_1080p.mp4",
+    "bytes": 15406790,
+    "shape": [
+      1920,
+      1080
+    ],
+    "codec": "HEVC",
+    "audio": "Original source, AAC 96k",
+    "reconstruction": "Bilinear predicted Lab chroma upsample and original full-resolution Lab L, matching baseline reconstruction"
+  },
+  "mlx_large_block_benchmark": {
+    "scope": "One randomly initialized official-size block; not trained-weight or full-pipeline performance",
+    "video_tokens": 16320,
+    "audio_tokens": 128,
+    "context_tokens": 256,
+    "dtype": "bfloat16",
+    "parameters": 386695360,
+    "seconds": {
+      "mlx_unfused": [
+        0.7890553750039544,
+        0.7905402920005145,
+        0.7909029170041322
+      ],
+      "mlx_fused": [
+        0.788307208000333,
+        0.7879728339976282,
+        0.7873488749974058
+      ],
+      "pytorch_mps": [
+        0.7975940840042313,
+        0.7984278330040979,
+        0.7980935829982627
+      ]
+    },
+    "median_seconds": {
+      "mlx_unfused": 0.7905402920005145,
+      "mlx_fused": 0.7879728339976282,
+      "pytorch_mps": 0.7980935829982627
+    },
+    "errors_against_mps": {
+      "video": {
+        "mean_absolute": 0.00013374567788559943,
+        "max_absolute": 0.03125
+      },
+      "audio": {
+        "mean_absolute": 7.044873927952722e-05,
+        "max_absolute": 0.015625
+      }
+    }
+  },
+  "ltx25": {
+    "weights_downloaded": false,
+    "http_status": 403,
+    "pipeline_import_test": "passed",
+    "trained_weight_parity": "not tested",
+    "end_to_end_run": "not tested",
+    "scope": "MLX transformer blocks with official PyTorch MPS remainder"
+  },
+  "ci": {
+    "experiment_tests_passed": 11,
+    "project_tests_passed": 38,
+    "mypy": "passed",
+    "ruff": "passed",
+    "uv_pip_check": "passed"
+  },
+  "artifacts_directory": "tmp/adapter_compare_90_120",
+  "report_url": "http://darkmac:1516/adapter-compare.html",
+  "git_branch": "deep_rem",
+  "branches_created": [],
+  "worktrees_created": []
+}

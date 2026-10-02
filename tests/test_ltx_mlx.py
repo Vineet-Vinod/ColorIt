@@ -4,7 +4,12 @@ import mlx.core as mx
 import numpy as np
 import pytest
 import torch
+from ltx_core.guidance.perturbations import (
+    BatchedPerturbationConfig,
+    PerturbationConfig,
+)
 from ltx_core.model.transformer.attention import AttentionOps, PytorchAttention
+from ltx_core.model.transformer.model import LTXModel
 from ltx_core.model.transformer.rope import LTXRopeType
 from ltx_core.model.transformer.transformer import (
     BasicAVTransformerBlock,
@@ -12,7 +17,12 @@ from ltx_core.model.transformer.transformer import (
 )
 from ltx_core.model.transformer.transformer_args import TransformerArgs
 
-from experiments.adapter_compare.ltx_mlx import MLXBlock, from_torch, modality_arrays
+from experiments.adapter_compare.ltx_mlx import (
+    MLXBlock,
+    from_torch,
+    install_mlx_blocks,
+    modality_arrays,
+)
 
 
 def arguments(
@@ -130,4 +140,51 @@ def test_mlx_reference_attention_honors_additive_mask() -> None:
     )
     np.testing.assert_allclose(
         np.array(actual), expected.numpy(), atol=0.00001, rtol=0.00001
+    )
+
+
+def test_installed_backend_preserves_joint_block_stack() -> None:
+    torch.manual_seed(19)
+    attention = PytorchAttention()
+    model = LTXModel(
+        num_attention_heads=4,
+        attention_head_dim=8,
+        cross_attention_dim=32,
+        audio_num_attention_heads=4,
+        audio_attention_head_dim=4,
+        audio_cross_attention_dim=16,
+        num_layers=2,
+        cross_attention_adaln=True,
+        attention_ops=AttentionOps(
+            attention_function=attention, masked_attention_function=attention
+        ),
+    ).eval()
+    with torch.no_grad():
+        for name, parameter in model.named_parameters():
+            if name.endswith(("q_norm.weight", "k_norm.weight")):
+                parameter.fill_(1)
+            else:
+                parameter.normal_(0, 0.05)
+    video, audio = (
+        arguments(32, 7, torch.float32, True),
+        arguments(16, 3, torch.float32, True),
+    )
+    perturbations = BatchedPerturbationConfig([PerturbationConfig.empty()], 2)
+    with torch.inference_mode():
+        expected_video, expected_audio = model._process_transformer_blocks(
+            video, audio, perturbations
+        )
+        backend = install_mlx_blocks(model)
+        actual_video, actual_audio = model._process_transformer_blocks(
+            video, audio, perturbations
+        )
+    assert install_mlx_blocks(model) is backend
+    assert model.num_blocks == 2
+    assert actual_video is not None and actual_audio is not None
+    assert expected_video is not None and expected_audio is not None
+    torch.testing.assert_close(
+        actual_video.x, expected_video.x, atol=0.00001, rtol=0.00001
+    )
+    torch.testing.assert_close(
+        actual_audio.x, expected_audio.x, atol=0.00001, rtol=0.00001
     )

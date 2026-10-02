@@ -1,0 +1,50 @@
+diff --git a/FGST/tools/mmedit/models/__init__.py b/FGST/tools/mmedit/models/__init__.py
+index a56a845..120a521 100644
+--- a/FGST/tools/mmedit/models/__init__.py
++++ b/FGST/tools/mmedit/models/__init__.py
+@@ -1,14 +1 @@
+-# Copyright (c) OpenMMLab. All rights reserved.
+-from .backbones import *  # noqa: F401, F403
+-from .base import BaseModel
+-from .builder import (build, build_backbone, build_component, build_loss,
+-                      build_model)
+-from .common import *  # noqa: F401, F403
+-from .losses import *  # noqa: F401, F403
+-from .registry import BACKBONES, COMPONENTS, LOSSES, MODELS
+-from .restorers import BasicRestorer
+-
+-__all__ = [
+-    'BaseModel', 'BasicRestorer', 'build', 'build_backbone', 'build_component',
+-    'build_loss', 'build_model', 'BACKBONES', 'COMPONENTS', 'LOSSES', 'MODELS'
+-]
++from .registry import BACKBONES
+diff --git a/FGST/tools/mmedit/models/backbones/__init__.py b/FGST/tools/mmedit/models/backbones/__init__.py
+index 3f0add3..60fb9bb 100644
+--- a/FGST/tools/mmedit/models/backbones/__init__.py
++++ b/FGST/tools/mmedit/models/backbones/__init__.py
+@@ -1,6 +1 @@
+-# Copyright (c) OpenMMLab. All rights reserved.
+-# from .sr_backbones import FGST, S2SVR
+-# __all__ = ['FGST', 'S2SVR']
+-
+-from .sr_backbones import FGT_colorization, S2SVR
+-__all__ = ['FGT_colorization', 'S2SVR']
++from .sr_backbones import FGT_colorization
+diff --git a/FGST/tools/mmedit/models/backbones/sr_backbones/__init__.py b/FGST/tools/mmedit/models/backbones/sr_backbones/__init__.py
+index ec89b96..371711e 100644
+--- a/FGST/tools/mmedit/models/backbones/sr_backbones/__init__.py
++++ b/FGST/tools/mmedit/models/backbones/sr_backbones/__init__.py
+@@ -1,13 +1 @@
+-# Copyright (c) OpenMMLab. All rights reserved.
+-
+-# from .basicvsr_net import BasicVSRNet
+-# from .FGST import FGST
+-# from .S2SVR import S2SVR
+-# __all__ = ['BasicVSRNet', 'FGST', 'S2SVR']
+-
+-#from .basicvsr_net_GMA import BasicVSRNet
+-from .S2SVR import S2SVR
+ from .FGT_colorization import FGT_colorization
+-from .FGST import FGST
+-#__all__ = ['BasicVSRNet','FGT_colorization', 'S2SVR']
+-__all__ = ['FGT_colorization', 'S2SVR','FGST']

@@ -19,6 +19,7 @@ data/frames/
 data/scenes/
 data/manifests/
 data/eval/
+data/adapter_compare_90_120/
 
 # Allow directory placeholders
 !data/**/.gitkeep

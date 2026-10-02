@@ -1,0 +1,28 @@
+{
+  "upstream": "https://github.com/dan64/vs-havc",
+  "revision": "6a8063143f3ec89fa159c836557851e5e4e57bad",
+  "function": "HAVC_cmnet2dit",
+  "conclusion": "Same learned CMNET2 architecture/checkpoint family, different orchestration defaults. Replacing only the reference generator in our tested pipeline is not equivalent to running HAVC defaults.",
+  "comparison": [
+    {"component": "Model", "tested": "DINOv3FeatureV6_LocalAtten_p374099; HF DINOv3 encoder", "havc": "Same checkpoint; native PyTorch DINOv3 encoder", "effect": "Same intended learned weights; exact native/HF output parity was not measured in this audit."},
+    {"component": "Working size", "tested": "683×384 bilinear, internally padded to 784×448", "havc": "Auto selects medium for 16:9: 512×288 using Spline36; slow 640×360", "effect": "Default HAVC uses substantially fewer spatial tokens."},
+    {"component": "Permanent references", "tested": "All 87 curated FLUX anchors cached and available in every shot", "havc": "Default sliding window of 20 anchors, generated in pairs", "effect": "Reference availability changes as the film advances; distant costume views may leave the window."},
+    {"component": "Temporal state", "tested": "Fresh propagator for every detected shot", "havc": "Continuous propagator; scene flags select anchors, PermMemWindowDit slides memory", "effect": "Shot-boundary behavior differs beyond which model generates references."},
+    {"component": "Memory matching", "tested": "top_k=30; mem_every=5; deep_update_every=-1; proximity bias disabled; exact sparse readout", "havc": "Same top-k/update defaults and disabled proximity bias; dense upstream readout", "effect": "Local optimization was checked against dense CPU output; up to one RGB byte difference in prior validation."},
+    {"component": "Local correlation", "tested": "PyTorch unfold/dot-product fallback, enable_corr=False", "havc": "CUDA spatial_correlation_sampler by default", "effect": "Alternative implementations of the same local correlation, not removed attention."},
+    {"component": "Execution mode", "tested": "Direct in-process MPS; encode_mode=2", "havc": "Forces encode_mode=0: CMNET2 RPC server", "effect": "Execution/transport difference; encode_mode is not a color-setting switch."},
+    {"component": "Retry", "tested": "Calls colorize_frame without retry", "havc": "retry_threshold=0.0 disables retry by default; optional new anchor and blended second pass", "effect": "Equivalent when disabled; enabling retry introduces additional coloring beyond initial references."},
+    {"component": "Output", "tested": "Resize predicted Lab chroma, restore original Lab luminance; no saturation boost", "havc": "Spline36 upscale, recover source luma; render_vivid=False", "effect": "Same source-luminance objective; Lab reconstruction versus VapourSynth YUV chroma/luma is not byte-identical."}
+  ],
+  "sources": [
+    "vshavc/__init__.py:2078-2237",
+    "vshavc/vsslib/vsresize.py:30-66",
+    "vshavc/colormnet2/__init__.py",
+    "vshavc/colormnet2/colormnet2_render.py",
+    "vshavc/colormnet2/model/attention.py:827-840",
+    "tmp/cmnet2_flux_gpu/run_gpu.py",
+    "tmp/cmnet2_flux_gpu/render_clip.py",
+    "tmp/cmnet2_flux_gpu/optimization_validation.json"
+  ],
+  "recommendation": "Keep the user's approved CMNET2 render as the quality baseline. HAVC is an integrated automation route, not a new learned colorizer; preserve the tested reference bank/resolution/reset policy when isolating DiT reference quality."
+}

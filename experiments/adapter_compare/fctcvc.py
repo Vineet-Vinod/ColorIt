@@ -16,7 +16,7 @@ import torch
 from numpy.typing import NDArray
 from pydantic import BaseModel, ConfigDict, Field
 
-from .windows import frame_windows
+from .windows import SceneManifest, frame_windows
 
 
 class Options(BaseModel):
@@ -33,11 +33,6 @@ class Options(BaseModel):
     window: int = Field(default=15, ge=3)
     device: Literal["mps", "cpu"] = "mps"
     scene_manifest: Path | None = None
-
-
-class SceneManifest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    scene_boundaries: list[int]
 
 
 def load_model(options: Options) -> torch.nn.Module:

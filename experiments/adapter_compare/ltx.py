@@ -24,8 +24,8 @@ from ltx_pipelines.utils.media_io import encode_video
 from ltx_pipelines.utils.model_paths import ModelPaths
 from pydantic import BaseModel, ConfigDict, Field
 
-from .fctcvc import SceneManifest
 from .ltx_mlx import install_mlx_blocks
+from .windows import SceneManifest
 
 
 class Options(BaseModel):

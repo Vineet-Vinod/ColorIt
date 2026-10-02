@@ -1,6 +1,13 @@
 from itertools import pairwise
 
+from pydantic import BaseModel, ConfigDict
+
 from .adapter_compare_dataclasses import FrameWindow
+
+
+class SceneManifest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    scene_boundaries: list[int]
 
 
 def frame_windows(frames: int, window: int, cuts: list[int]) -> list[FrameWindow]:

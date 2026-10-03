@@ -24,6 +24,7 @@ from ltx_pipelines.utils.media_io import encode_video
 from ltx_pipelines.utils.model_paths import ModelPaths
 from pydantic import BaseModel, ConfigDict, Field
 
+from .gpu_guard import configure_gpu_limits
 from .ltx_mlx import install_mlx_blocks
 from .windows import SceneManifest
 
@@ -33,13 +34,16 @@ class Options(BaseModel):
     source: Path
     weights: Path
     unused_upsampler: Path
-    scene_manifest: Path
-    prompts: Path
+    scene_manifest: Path | None = None
+    prompts: Path | None = None
+    prompt: str = "Reference shows a black and white film. Edited shows the same scene with natural colors restored. COLORIZE the people, clothing and surroundings with vivid, plausible colors that remain consistent throughout the film. Preserve subject identity, framing, motion and background geometry, changing only color."
     output: Path
     frames: int = Field(default=750, ge=1)
     source_offset: int = Field(default=2250, ge=0)
     seed: int = 42
     mlx: bool = True
+    width: int = Field(default=960, ge=64, multiple_of=32)
+    height: int = Field(default=544, ge=64, multiple_of=32)
 
 
 def wrap_model(model: torch.nn.Module, tools: LatentTools | None) -> torch.nn.Module:
@@ -104,17 +108,23 @@ def run(command: list[str]) -> None:
 
 @torch.inference_mode()
 def colorize(options: Options) -> None:
-    torch.set_num_threads(8)
+    configure_gpu_limits()
     options.output.parent.mkdir(parents=True, exist_ok=True)
     pipeline = load_pipeline(options)
-    manifest = SceneManifest.model_validate_json(options.scene_manifest.read_text())
+    boundaries = (
+        SceneManifest.model_validate_json(
+            options.scene_manifest.read_text()
+        ).scene_boundaries
+        if options.scene_manifest is not None
+        else []
+    )
     cuts = sorted(
         {
             0,
             options.frames,
             *(
                 cut - options.source_offset
-                for cut in manifest.scene_boundaries
+                for cut in boundaries
                 if options.source_offset < cut < options.source_offset + options.frames
             ),
         }
@@ -127,7 +137,11 @@ def colorize(options: Options) -> None:
         source = options.output.parent / f"ltx_source_shot_{shot:02d}.mp4"
         raw = options.output.parent / f"ltx_raw_shot_{shot:02d}.mp4"
         trimmed = options.output.parent / f"ltx_shot_{shot:02d}.mp4"
-        prompt = (options.prompts / f"shot_{shot:02d}.txt").read_text().strip()
+        prompt = (
+            (options.prompts / f"shot_{shot:02d}.txt").read_text().strip()
+            if options.prompts is not None
+            else options.prompt
+        )
         run(
             [
                 "ffmpeg",
@@ -155,8 +169,8 @@ def colorize(options: Options) -> None:
         result = pipeline(
             prompt=prompt,
             seed=options.seed,
-            height=1088,
-            width=1920,
+            height=options.height * 2,
+            width=options.width * 2,
             num_frames=model_frames,
             frame_rate=25,
             images=[],
@@ -208,6 +222,7 @@ def colorize(options: Options) -> None:
             "seconds": elapsed,
             "prompt": prompt,
             "output": str(trimmed),
+            "mlx_peak_bytes": mx.get_peak_memory() if options.mlx else None,
         }
         shots.append(record)
         options.output.with_suffix(".progress.json").write_text(
@@ -245,13 +260,14 @@ def colorize(options: Options) -> None:
         **options.model_dump(mode="json"),
         "seconds": perf_counter() - started,
         "shots": shots,
-        "width": 960,
-        "height": 544,
+        "width": options.width,
+        "height": options.height,
         "fps": 25,
         "recipe": "Official stage-1 distilled colorization, source video and text only, strength 1, no CFG, convolutional VAE; 121-frame chunks with 17-frame decoded overlap",
         "backend": "MLX transformer blocks with official MPS text encoder, VAE and transformer input/output layers"
         if options.mlx
         else "Official PyTorch MPS",
+        "case": "assisted" if options.prompts is not None else "automatic",
     }
     options.output.with_suffix(".json").write_text(json.dumps(record, indent=2) + "\n")
     print(record, flush=True)
@@ -263,13 +279,16 @@ if __name__ == "__main__":
         "source",
         "weights",
         "unused-upsampler",
-        "scene-manifest",
-        "prompts",
         "output",
     ):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--scene-manifest", type=Path)
+    parser.add_argument("--prompts", type=Path)
+    parser.add_argument("--prompt", default=Options.model_fields["prompt"].default)
     parser.add_argument("--frames", type=int, default=750)
     parser.add_argument("--source-offset", type=int, default=2250)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--width", type=int, default=960)
+    parser.add_argument("--height", type=int, default=544)
     parser.add_argument("--mlx", action=argparse.BooleanOptionalAction, default=True)
     colorize(Options.model_validate(vars(parser.parse_args())))

@@ -197,6 +197,7 @@ def run_havc(options: Options) -> int:
                 "commands": commands,
                 "manual_input": options.case == "assisted",
                 "implementation": "Mac integration of author Qwen2.1/Viggle and CMNET2; no upstream video CLI.",
+                "vae": "Native Qwen VAE on CPU FP32; large-image MPS VAE reconstruction is numerically invalid.",
             },
             indent=2,
         )

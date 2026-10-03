@@ -34,7 +34,7 @@ class InputReference(BaseModel):
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Author HAVC Qwen2.1/Viggle image recipe on PyTorch MPS; BF16 UNet."
+        description="Author HAVC Qwen2.1/Viggle recipe; BF16 UNet and CPU FP32 VAE."
     )
     parser.add_argument("--image", type=Path)
     parser.add_argument("--output", type=Path)
@@ -128,6 +128,9 @@ def main() -> None:
     comfy_args.cpu = args.import_check
     comfy_args.disable_dynamic_vram = True
     comfy_args.use_pytorch_cross_attention = True
+    # Large Qwen VAE images corrupt on MPS; CPU FP32 preserves its native math.
+    comfy_args.cpu_vae = True
+    comfy_args.fp32_vae = True
     import folder_paths
 
     for category, directory in [

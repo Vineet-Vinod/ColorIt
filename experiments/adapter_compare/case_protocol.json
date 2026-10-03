@@ -1,0 +1,26 @@
+{
+  "source": "deep_rem.mp4",
+  "start_frame": 2250,
+  "end_frame_exclusive": 3000,
+  "fps": 25,
+  "baseline": "tmp/cmnet2_flux_gpu/deep_rem_flux_cmnet2_gpu_180s.mp4",
+  "assisted": {
+    "priority": "Best plausible output using model-specific prompts and reference preparation.",
+    "palette": "Lavender and purple dress, maroon and gold male costume, warm skin and green garden.",
+    "cuts": "Visually verified source boundaries in scene_manifest.json.",
+    "inspection": "Prompt/reference revision is allowed and must be recorded."
+  },
+  "automatic": {
+    "priority": "One CLI launch from the original source, with no reference selection or palette editing by the operator.",
+    "ltx": "Fixed generic prompt, seed 42, continuous native chunks across the full clip.",
+    "havc": "Author edge detector, paired author DiT reference generation, sliding 20-reference CMNET2 memory and author propagation size.",
+    "inspection": "Judge the first completed output. Technical setup failures are recorded separately and do not authorize quality tuning."
+  },
+  "shared_setup": {
+    "machine": "M3 Ultra, 60 GPU cores, 256 GiB unified memory",
+    "concurrency": "One experiment GPU worker at a time, enforced by a file lock.",
+    "memory": "Backend allocation caps plus a supervisor that terminates its worker on low system headroom or swap growth.",
+    "compatibility_gates": "Short trained-model runs before case launches; gates are not scored as full-clip results.",
+    "comparison": "Visual color plausibility, temporal stability, identity/detail preservation and runtime. No ground-truth color exists for this clip."
+  }
+}

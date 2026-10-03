@@ -309,7 +309,9 @@ def main() -> None:
     torch.mps.synchronize()
     result = {
         "model": "Qwen-Image-2.1 + Viggle Turbo v0.2.1 rank128",
-        "device": "mps" if args.backend == "mps" else "mlx-transformer+mps-encoders",
+        "device": f"{args.backend}-transformer+mps-text-encoder+cpu-vae",
+        "vae_device": "cpu",
+        "vae_precision": "fp32",
         "unet_precision": args.precision,
         "input_pre_resize_long_side": 0,
         "steps": args.steps,

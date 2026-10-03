@@ -22,6 +22,32 @@ ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = ROOT / "tmp/adapter_compare_90_120/upstream/HAVCServerDiT"
 
 
+def test_nonfinite_havc_stops_before_decode() -> None:
+    from experiments.adapter_compare.havc_numerics import guard_method
+
+    class Decoder:
+        called = False
+
+        def decode(self, samples: dict[str, torch.Tensor]) -> torch.Tensor:
+            self.called = True
+            return samples["samples"]
+
+    decoder = Decoder()
+    guard_method(decoder, "decode", "vae.decode")
+    with pytest.raises(FloatingPointError, match="vae.decode.input"):
+        decoder.decode({"samples": torch.tensor([float("nan")])})
+    assert not decoder.called
+
+
+def test_nonfinite_havc_encoding_is_rejected() -> None:
+    from experiments.adapter_compare.havc_numerics import guard_method
+
+    encoder = SimpleNamespace(encode=lambda: [[torch.tensor([float("inf")]), {}]])
+    guard_method(encoder, "encode", "clip")
+    with pytest.raises(FloatingPointError, match="clip.output"):
+        encoder.encode()
+
+
 @pytest.fixture(scope="module", autouse=True)
 def cpu_only() -> None:
     mx.set_default_device(mx.cpu)

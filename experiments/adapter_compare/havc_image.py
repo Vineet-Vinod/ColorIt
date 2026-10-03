@@ -230,6 +230,9 @@ def main() -> None:
         pipeline["model"].remove_wrappers_with_key(
             WrappersMP.DIFFUSION_MODEL, "viggle_turbo_lora"
         )
+    from .havc_numerics import guard_pipeline
+
+    guard_pipeline(pipeline, pipeline["model"].model.diffusion_model)
     load_seconds = time.monotonic() - start
     elapsed = 0.0
     references = []

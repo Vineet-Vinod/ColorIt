@@ -10,7 +10,7 @@ from time import perf_counter
 import mlx.core as mx
 import numpy as np
 import torch
-from ltx_core.model.transformer.attention import AttentionOps, PytorchAttention
+from ltx_core.model.transformer.attention import AttentionOps, MPSSdpaAttention
 from ltx_core.model.transformer.rope import LTXRopeType
 from ltx_core.model.transformer.transformer import (
     BasicAVTransformerBlock,
@@ -18,6 +18,7 @@ from ltx_core.model.transformer.transformer import (
 )
 from ltx_core.model.transformer.transformer_args import TransformerArgs
 
+from .gpu_guard import configure_gpu_limits
 from .ltx_mlx import MLXBlock, from_torch, modality_arrays
 
 
@@ -71,9 +72,9 @@ def to_mps(args: TransformerArgs) -> TransformerArgs:
 
 @torch.inference_mode()
 def benchmark(output: Path, tokens: int, repeats: int) -> None:
+    configure_gpu_limits()
     torch.manual_seed(17)
-    torch.set_num_threads(8)
-    attention = PytorchAttention()
+    attention = MPSSdpaAttention()
     block = (
         BasicAVTransformerBlock(
             TransformerConfig(4096, 32, 128, 4096, True, True),
@@ -139,6 +140,7 @@ def benchmark(output: Path, tokens: int, repeats: int) -> None:
         "audio_tokens": 128,
         "context_tokens": 256,
         "dtype": "bfloat16",
+        "mps_attention": attention.label,
         "parameters": sum(parameter.numel() for parameter in block.parameters()),
         "seconds": timings,
         "median_seconds": {key: median(values) for key, values in timings.items()},

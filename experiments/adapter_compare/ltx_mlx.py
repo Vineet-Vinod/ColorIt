@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from ltx_core.guidance.perturbations import BatchedPerturbationConfig
 from ltx_core.model.transformer.attention import Attention
-from ltx_core.model.transformer.model import LTXModel
+from ltx_core.model.transformer.model import LTXModel, X0Model
 from ltx_core.model.transformer.rope import LTXRopeType
 from ltx_core.model.transformer.transformer import BasicAVTransformerBlock
 from ltx_core.model.transformer.transformer_args import TransformerArgs
@@ -333,9 +333,30 @@ class MLXBlocks:
         )
 
 
-def install_mlx_blocks(model: LTXModel) -> MLXBlocks:
+def dispose_mlx_model(model: LTXModel | X0Model) -> None:
+    core = cast(LTXModel, model.velocity_model) if isinstance(model, X0Model) else model
+    backend = getattr(core, "_mlx_backend", None)
+    if backend is not None:
+        mx.synchronize()
+        for block in cast(MLXBlocks, backend).blocks:
+            block.weights.clear()
+        cast(MLXBlocks, backend).blocks.clear()
+        del core._mlx_backend
+        del core._process_transformer_blocks
+        del core.dispose
+    if model is not core:
+        del model.dispose
+    type(model).dispose(model)
+    mx.clear_cache()
+
+
+def install_mlx_blocks(
+    model: LTXModel, disposal_owner: X0Model | None = None
+) -> MLXBlocks:
     existing = getattr(model, "_mlx_backend", None)
     if existing is not None:
+        if disposal_owner is not None:
+            disposal_owner.dispose = MethodType(dispose_mlx_model, disposal_owner)
         return cast(MLXBlocks, existing)
     blocks = model.transformer_blocks
     blocks.to("cpu")
@@ -345,5 +366,8 @@ def install_mlx_blocks(model: LTXModel) -> MLXBlocks:
         torch.nn.Identity() for _ in range(len(blocks))
     )
     model._mlx_backend = backend
+    model.dispose = MethodType(dispose_mlx_model, model)
+    if disposal_owner is not None:
+        disposal_owner.dispose = MethodType(dispose_mlx_model, disposal_owner)
     torch.mps.empty_cache()
     return backend

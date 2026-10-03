@@ -51,7 +51,7 @@ def wrap_model(model: torch.nn.Module, tools: LatentTools | None) -> torch.nn.Mo
     wrapped = cast(X0Model, model)
     core = cast(LTXModel, wrapped.velocity_model)
     started = perf_counter()
-    backend = install_mlx_blocks(core)
+    backend = install_mlx_blocks(core, disposal_owner=wrapped)
     print(
         f"MLX installed: {len(backend.blocks)} blocks in {perf_counter() - started:.2f}s",
         flush=True,

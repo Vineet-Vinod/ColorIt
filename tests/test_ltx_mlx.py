@@ -9,7 +9,7 @@ from ltx_core.guidance.perturbations import (
     PerturbationConfig,
 )
 from ltx_core.model.transformer.attention import AttentionOps, PytorchAttention
-from ltx_core.model.transformer.model import LTXModel
+from ltx_core.model.transformer.model import LTXModel, X0Model
 from ltx_core.model.transformer.rope import LTXRopeType
 from ltx_core.model.transformer.transformer import (
     BasicAVTransformerBlock,
@@ -188,3 +188,35 @@ def test_installed_backend_preserves_joint_block_stack() -> None:
     torch.testing.assert_close(
         actual_audio.x, expected_audio.x, atol=0.00001, rtol=0.00001
     )
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_disposal_releases_mlx_weights_while_model_remains_alive(
+    monkeypatch: pytest.MonkeyPatch, wrapped: bool
+) -> None:
+    monkeypatch.setattr(torch.mps, "empty_cache", lambda: None)
+    model = LTXModel(
+        num_attention_heads=4,
+        attention_head_dim=8,
+        cross_attention_dim=32,
+        audio_num_attention_heads=4,
+        audio_attention_head_dim=4,
+        audio_cross_attention_dim=16,
+        num_layers=1,
+    )
+    owner = X0Model(model) if wrapped else None
+    backend = install_mlx_blocks(model, disposal_owner=owner)
+    block = backend.blocks[0]
+    assert block.weights
+    disposable = model if owner is None else owner
+
+    disposable.dispose()
+
+    assert not block.weights
+    assert not backend.blocks
+    assert "_mlx_backend" not in model.__dict__
+    assert "_process_transformer_blocks" not in model.__dict__
+    assert "dispose" not in model.__dict__
+    assert "dispose" not in disposable.__dict__
+    assert all(parameter.device.type == "meta" for parameter in disposable.parameters())
+    disposable.dispose()

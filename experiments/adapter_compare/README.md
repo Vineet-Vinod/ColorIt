@@ -13,9 +13,33 @@ No new branch or worktree. Generated media and logs are in
   This is a propagation test with dense supplied colored frames. The original
   scene manifest missed three transitions; the final run uses verified boundaries
   in `scene_manifest.json`.
-- LTX-2.5 is **blocked by Hugging Face access**, including the colorization adapter.
-  Its local pipeline imports, MLX block port and numerical tests pass. Full trained
-  weights, end-to-end parity, actual runtime and output quality remain untested.
+- HAVC Qwen2.1 + CMNET2 and LTX-2.5 completed automatic and assisted runs on all
+  750 frames. The fresh runtime was frozen at `d1e6278` after debugging the large
+  Qwen VAE on MPS. The corrected HAVC path uses the author's VAE on CPU FP32.
+- The [video comparison](http://darkmac:1516/colorit-adapter-90-120.html)
+  includes the existing curated CMNET2 + FLUX baseline, all four first complete
+  fresh outputs, raw LTX videos, selected frames and delivery validation.
+  Exact measurements and limitations are in `unattended_results.json`.
+- The curated baseline retains the most consistent costume palette in the
+  inspected frames. HAVC automatic changes outfit colors; assisted HAVC still
+  confuses costume roles in the close-up. Assisted LTX follows the requested
+  palette better than automatic LTX, but fades during the long close-up and
+  changes saturation across cuts. Keep the existing baseline for this clip.
+
+| Fresh case | Queue wall time | Working size | 1080p delivery bytes |
+| --- | ---: | --- | ---: |
+| HAVC automatic | 1,023.69 s | 512×288 propagation | 15,393,932 |
+| HAVC assisted | 1,051.32 s | 683×384 propagation | 15,395,209 |
+| LTX automatic | 3,165.64 s | 960×544 | 15,373,683 |
+| LTX assisted | 3,179.43 s | 960×544 | 15,402,248 |
+
+Each delivery independently decodes 750 frames at 25 fps, with 30 seconds of
+video and audio, at 1920×1080. All are below the 16,867,622-byte interval cap.
+Queue times include HAVC delivery; LTX's subsequent CPU 1080p packaging is
+excluded. The baseline was reused, so it has no comparable fresh run time.
+Both HAVC deliveries and assisted LTX restore original source Lab lightness.
+Automatic LTX keeps generated RGB. Raw 960×544 LTX outputs remain available.
+Local type checking, lint and all 70 tests passed after the full queue.
 
 ## Pinned upstream code
 
@@ -81,7 +105,7 @@ PYTHONPATH="$PWD" tmp/adapter_compare_90_120/env/bin/python -u \
   --output tmp/adapter_compare_90_120/fctcvc_1080p.mp4
 ```
 
-## LTX setup awaiting access
+## LTX setup
 
 The saved Hugging Face account must have access to both `Lightricks/LTX-2.5` and
 `Lightricks/LTX-2.5-22b-IC-LoRA-Colorization`. `download.py` pins both revisions
@@ -112,12 +136,14 @@ PYTHONPATH="$PWD" tmp/adapter_compare_90_120/env/bin/python -u \
   --output tmp/adapter_compare_90_120/ltx25_90_120.mp4
 ```
 
-Run this in tmux after first validating trained-weight parity on a short window.
+Run coloring commands in tmux and serialize GPU workers with the memory guard.
 `--no-mlx` selects the official PyTorch MPS transformer for that comparison.
 The upsampler argument satisfies the upstream constructor; stage 2 is skipped
 and those weights never participate. Current upstream removed the model card's
 `tile_reference_encode` flag, so the prepared native recipe encodes references
-without tiling. This integration has not yet run with trained weights.
+without tiling. Both full trained-weight evaluation modes completed. This is
+stage 1 only, with no learned spatial upscaler. Short numerical checks and full
+outputs do not establish end-to-end equivalence to the author's CUDA pipeline.
 
 ## MLX scope
 
@@ -129,6 +155,7 @@ distilled path. Fresh builders avoid reusing shells whose blocks were replaced.
 
 Numerical tests compare video and joint audio/video blocks, RoPE, attention masks,
 and the installed block stack against official PyTorch code in FP32 and BF16.
-`benchmark_mlx.py` measures random-weight blocks at official default widths. At
-16,320 video tokens, the median was 788 ms on MLX versus 798 ms on MPS. This is
-about 1% faster and excludes transfer, model loading and all other pipeline work.
+`benchmark_mlx.py` measures random-weight blocks at official default widths,
+using the official `MPSSdpaAttention` implementation. Historical timings with
+plain Torch attention do not establish performance against that implementation
+or the trained pipeline. Use the full-case measurements above for local runtime.

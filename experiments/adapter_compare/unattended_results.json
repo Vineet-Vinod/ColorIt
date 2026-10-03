@@ -1,0 +1,267 @@
+{
+  "status": "completed",
+  "source": "deep_rem.mp4",
+  "source_interval_seconds": [
+    90,
+    120
+  ],
+  "source_frames_half_open": [
+    2250,
+    3000
+  ],
+  "hardware": "M3 Ultra, 60 GPU cores, 28 CPU cores, 256 GiB unified memory",
+  "runtime_commit": "d1e6278d903929d4911e1dff10a689b51c20bb1c",
+  "source_interval_packet_payload_bytes": 8433811,
+  "delivery_cap_bytes": 16867622,
+  "report_url": "http://darkmac:1516/colorit-adapter-90-120.html",
+  "cases": {
+    "havc_automatic": {
+      "queue_seconds": 1023.6895476250065,
+      "delivery_bytes": 15393932,
+      "delivery_ratio_to_source_interval_payload": 1.8252640472972421,
+      "delivery": "/Users/darksca/ColorIt/tmp/adapter_compare_90_120/unattended/cases/havc_automatic/output.mp4",
+      "raw_output": "/Users/darksca/ColorIt/tmp/adapter_compare_90_120/unattended/cases/havc_automatic/output.mp4",
+      "frames": 750,
+      "fps": 25,
+      "seconds": 30,
+      "delivery_size": [
+        1920,
+        1080
+      ],
+      "audio_seconds": 30,
+      "working_size": [
+        512,
+        288
+      ],
+      "guard_summary": {
+        "propagation_guard.json": {
+          "exit_code": 0,
+          "stop_reason": null,
+          "seconds": 120.53310629200132,
+          "peak_family_rss": 3714727936,
+          "minimum_system_available": 244580761600
+        },
+        "references_guard.json": {
+          "exit_code": 0,
+          "stop_reason": null,
+          "seconds": 888.2380012089998,
+          "peak_family_rss": 36703436800,
+          "minimum_system_available": 214686531584
+        }
+      },
+      "diagnostics": {
+        "frames": 750,
+        "mean_chroma": 17.389054197947186,
+        "luma_mae": 0.009572516411940256,
+        "luma_ssim": 0.9956861902031517,
+        "source_motion_compensated_ab_mae": 0.5541616910567848,
+        "natural_cut_scores": {
+          "95.64": 9.03320026397705,
+          "109.04": 6.97660493850708,
+          "115.00": 2.9382691383361816,
+          "118.60": 9.215394973754883,
+          "119.76": 8.897890090942383
+        },
+        "metrics_are_quality_scores": false
+      },
+      "observed_quality": "Natural-looking garden and skin in sampled frames; costume palette changes between independent reference pairs and shots.",
+      "configuration_evidence": "tmp/adapter_compare_90_120/unattended/cases/havc_automatic/protocol.json",
+      "model_evidence": "tmp/adapter_compare_90_120/unattended/cases/havc_automatic/output.json",
+      "propagation_seconds": 90.891329666003,
+      "references": 18
+    },
+    "havc_assisted": {
+      "queue_seconds": 1051.3186149579997,
+      "delivery_bytes": 15395209,
+      "delivery_ratio_to_source_interval_payload": 1.8254154616459866,
+      "delivery": "/Users/darksca/ColorIt/tmp/adapter_compare_90_120/unattended/cases/havc_assisted/output.mp4",
+      "raw_output": "/Users/darksca/ColorIt/tmp/adapter_compare_90_120/unattended/cases/havc_assisted/output.mp4",
+      "frames": 750,
+      "fps": 25,
+      "seconds": 30,
+      "delivery_size": [
+        1920,
+        1080
+      ],
+      "audio_seconds": 30,
+      "working_size": [
+        683,
+        384
+      ],
+      "guard_summary": {
+        "propagation_guard.json": {
+          "exit_code": 0,
+          "stop_reason": null,
+          "seconds": 186.78125104100036,
+          "peak_family_rss": 3905224704,
+          "minimum_system_available": 243200475136
+        },
+        "references_guard.json": {
+          "exit_code": 0,
+          "stop_reason": null,
+          "seconds": 861.937115083012,
+          "peak_family_rss": 44167954432,
+          "minimum_system_available": 211812270080
+        }
+      },
+      "diagnostics": {
+        "frames": 750,
+        "mean_chroma": 16.122940149943034,
+        "luma_mae": 0.009583159808317821,
+        "luma_ssim": 0.9957484286917054,
+        "source_motion_compensated_ab_mae": 0.5403167666486834,
+        "natural_cut_scores": {
+          "95.64": 7.732096195220947,
+          "109.04": 6.04905366897583,
+          "115.00": 3.5351388454437256,
+          "118.60": 10.658077239990234,
+          "119.76": 8.121098518371582
+        },
+        "metrics_are_quality_scores": false
+      },
+      "observed_quality": "Purple dress improves in wide shots and final portrait; close-up bodice remains brown in places and male garment turns purple around 106 seconds.",
+      "configuration_evidence": "tmp/adapter_compare_90_120/unattended/cases/havc_assisted/protocol.json",
+      "model_evidence": "tmp/adapter_compare_90_120/unattended/cases/havc_assisted/output.json",
+      "propagation_seconds": 158.1620038330002,
+      "references": 17
+    },
+    "ltx_automatic": {
+      "queue_seconds": 3165.6365818750055,
+      "delivery_bytes": 15373683,
+      "delivery_ratio_to_source_interval_payload": 1.8228631160930686,
+      "delivery": "/Users/darksca/ColorIt/tmp/adapter_compare_90_120/unattended/cases/ltx_automatic/delivery.mp4",
+      "raw_output": "/Users/darksca/ColorIt/tmp/adapter_compare_90_120/unattended/cases/ltx_automatic/output.mp4",
+      "frames": 750,
+      "fps": 25,
+      "seconds": 30,
+      "delivery_size": [
+        1920,
+        1080
+      ],
+      "audio_seconds": 30,
+      "working_size": [
+        960,
+        544
+      ],
+      "guard_summary": {
+        "guard.json": {
+          "exit_code": 0,
+          "stop_reason": null,
+          "seconds": 3161.7649952079955,
+          "peak_family_rss": 85243478016,
+          "minimum_system_available": 190529716224
+        }
+      },
+      "diagnostics": {
+        "frames": 750,
+        "mean_chroma": 6.989722861607869,
+        "luma_mae": 0.03001407964388529,
+        "luma_ssim": 0.9483348173804992,
+        "source_motion_compensated_ab_mae": 0.5028693706438105,
+        "natural_cut_scores": {
+          "95.64": 4.209827899932861,
+          "109.04": 2.465071678161621,
+          "115.00": 1.1354864835739136,
+          "118.60": 4.398614406585693,
+          "119.76": 3.045675754547119
+        },
+        "metrics_are_quality_scores": false
+      },
+      "observed_quality": "Mainly red/cyan costume color; weak or gray skin and foliage. Sampled native geometry follows the source.",
+      "configuration_evidence": "tmp/adapter_compare_90_120/unattended/cases/ltx_automatic/protocol.json",
+      "model_evidence": "tmp/adapter_compare_90_120/unattended/cases/ltx_automatic/output.json"
+    },
+    "ltx_assisted": {
+      "queue_seconds": 3179.4274460000015,
+      "delivery_bytes": 15402248,
+      "delivery_ratio_to_source_interval_payload": 1.82625007840465,
+      "delivery": "/Users/darksca/ColorIt/tmp/adapter_compare_90_120/unattended/cases/ltx_assisted/delivery.mp4",
+      "raw_output": "/Users/darksca/ColorIt/tmp/adapter_compare_90_120/unattended/cases/ltx_assisted/output.mp4",
+      "frames": 750,
+      "fps": 25,
+      "seconds": 30,
+      "delivery_size": [
+        1920,
+        1080
+      ],
+      "audio_seconds": 30,
+      "working_size": [
+        960,
+        544
+      ],
+      "guard_summary": {
+        "guard.json": {
+          "exit_code": 0,
+          "stop_reason": null,
+          "seconds": 3175.5642037500074,
+          "peak_family_rss": 84998471680,
+          "minimum_system_available": 189456760832
+        }
+      },
+      "diagnostics": {
+        "frames": 750,
+        "mean_chroma": 15.117848476409913,
+        "luma_mae": 0.009890038798650106,
+        "luma_ssim": 0.9955241247872858,
+        "source_motion_compensated_ab_mae": 0.6998399593416722,
+        "natural_cut_scores": {
+          "95.64": 7.666868686676025,
+          "109.04": 12.519604682922363,
+          "115.00": 5.480749607086182,
+          "118.60": 12.483593940734863,
+          "119.76": 12.489824295043945
+        },
+        "metrics_are_quality_scores": false
+      },
+      "observed_quality": "Requested lavender/maroon palette largely follows shot prompts. Skin has a pink/red cast. Long close-up loses saturation toward 109 seconds, followed by vivid color in the next wide shot.",
+      "configuration_evidence": "tmp/adapter_compare_90_120/unattended/cases/ltx_assisted/protocol.json",
+      "model_evidence": "tmp/adapter_compare_90_120/unattended/cases/ltx_assisted/output.json"
+    }
+  },
+  "baseline": {
+    "source": "tmp/cmnet2_flux_gpu/deep_rem_flux_cmnet2_gpu_180s.mp4",
+    "type": "Reused curated, assisted CMNET2 + FLUX output",
+    "new_runtime_seconds": null,
+    "diagnostics": {
+      "frames": 750,
+      "mean_chroma": 20.192570940653482,
+      "luma_mae": 0.009998417110443114,
+      "luma_ssim": 0.994743072725935,
+      "source_motion_compensated_ab_mae": 0.7193385392267216,
+      "natural_cut_scores": {
+        "95.64": 9.046144485473633,
+        "109.04": 8.222249031066895,
+        "115.00": 5.297464847564697,
+        "118.60": 11.776318550109863,
+        "119.76": 14.122408866882324
+      },
+      "metrics_are_quality_scores": false
+    }
+  },
+  "recommendation": "Keep the existing curated baseline for this clip; none of the four first fresh outputs is a demonstrated improvement in costume consistency.",
+  "inspection": "15 matched overview frames, neighbors of all five shot transitions, 33 raw LTX frames around 11 internal window starts, and all 750 frames through CPU diagnostics. No claim of exhaustive human playback or absence of subtle flicker.",
+  "limitations": [
+    "No ground-truth color. Diagnostics are not quality scores; weak color can reduce measured temporal error.",
+    "The assisted cases change prompts, cuts, and other settings together; this comparison cannot isolate one intervention.",
+    "Both HAVC modes and assisted LTX restore original Lab lightness; automatic LTX preserves generated RGB. Raw LTX output is retained.",
+    "HAVC uses CPU FP32 Qwen VAE after invalid large-shape MPS reconstruction, BF16 MLX transformer, MPS text encoder, native independent image pairs and direct CMNET2 integration rather than author CUDA/RPC pipeline.",
+    "LTX uses distilled stage 1 only, official convolutional VAE instead of default DiffVAE, MLX transformer blocks and MPS text/VAE/input/output. No learned stage-2 upscaler.",
+    "Queue times include HAVC delivery, but exclude subsequent CPU LTX 1080p packaging. Reused baseline time is not comparable.",
+    "Guard family RSS is process resident memory, not GPU allocation."
+  ],
+  "invalid_run_archive": "tmp/adapter_compare_90_120/unattended_invalid_mps_vae_20261003T103414Z",
+  "ci": {
+    "exit_code": 0,
+    "type_check": "passed",
+    "lint": "passed",
+    "tests_passed": 70,
+    "groups": [
+      13,
+      19,
+      38
+    ],
+    "log": "tmp/adapter_compare_90_120/unattended/final_ci.log"
+  },
+  "branches_created": [],
+  "worktrees_created": []
+}

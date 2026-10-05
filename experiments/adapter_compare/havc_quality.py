@@ -15,7 +15,7 @@ class Options(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source: Path
     output: Path
-    width: int = Field(default=640, ge=384, le=1920)
+    width: int = Field(default=1920, ge=384, le=1920)
     enhance_prompt: bool = False
     cache_text_weights: bool = False
 
@@ -67,7 +67,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--width", type=int, default=640)
+    parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--enhance-prompt", action="store_true")
     parser.add_argument("--cache-text-weights", action="store_true")
     raise SystemExit(run(Options.model_validate(vars(parser.parse_args()))))

@@ -4,7 +4,86 @@ Experiments on branch `deep_rem`, on the M3 Ultra with 256 GiB unified memory.
 No new branch or worktree. Generated media and logs are in
 `tmp/adapter_compare_90_120`; weights are in `data/adapter_compare_90_120`.
 
-## Current state
+## HAVC quality follow-up, Oct 4
+
+The [completed steelman report](http://darkmac:1516/colorit-havc-steelman-90-120.html)
+replaces the earlier HAVC quality judgment. It includes four aligned full videos,
+source-aligned frames, repair controls, costs, source citations and an unsent
+reply to Dan. Exact pins, hashes and measurements are in
+`havc_steelman_results.json`; artifacts remain under
+`tmp/adapter_compare_90_120/steelman`.
+
+HAVC produces a good assisted result when its documented repairs are used.
+Purple survives the close-up, wide shot, return, feet and final face. The curated
+FLUX baseline remains our preferred look for its sky and costume contrast, but
+assisted HAVC is a credible alternative. Our earlier paired-only evaluation
+undersold it.
+
+| Final case | Generation + final propagation/delivery | Intervention |
+| --- | ---: | --- |
+| Movie-only HAVC | 880.19 + 150.93 s | 15 automatically selected anchors; fixed author prompt |
+| HAVC with one global palette | 884.67 + 151.50 s | Same palette text for all 15 anchors; no anchor review/correction |
+| Repaired assisted HAVC | 1,900.85 s recorded work | 17 reviewed anchors, five replacements, six repair candidates, nine prompt forms, verified cuts |
+
+Automatic totals exclude extraction, dedup and development. Assisted cost
+includes a whole six-image development batch supplying its chosen wide anchor,
+initial generation, RGB repairs, transfers and final render; other development
+is separate. Baseline curation costs are incomplete and its propagation used
+87 references over 180 seconds. These are not matched-budget comparisons.
+
+The unattended runs disable Fast Pipeline, use Qwen2.1/Viggle 0.2.1 native six
+steps and seed 42, apply the GUI first-reference copy, and use the Oct 4 DINOv3
+selector package. Eighteen candidates become 15 anchors. Continuous propagation
+uses the GUI 15-reference window with slide step one. A complete original-size
+run and matched controls did not show a clear benefit over 640 on this clip.
+Three real prompt rewrites, proximity bias, smaller memory windows and native
+vivid-color samples were also inspected before selecting the final options.
+
+Movie-only generation settles mostly on gold. One global palette makes the
+close-ups purple but loses it in the distant wide shot and much of the return.
+An additional assisted control uses unchanged automatic anchors and our
+manually verified cut boundaries. It improves return and feet but leaves the
+wide shot weak. Iterative Fix Colors and RGB-preserving Fix Image repairs,
+including reuse of one chosen wide palette, fix that remaining weakness.
+
+The code audit finds current BW plus text entering automatic DiT generation;
+both paired inputs become BW. Colored anchors enter CMNET2 memory afterward.
+Optional coverage retry can add fresh BW-generated anchors and blend them into
+propagation; it is disabled by default and its documented CUDA backend was not
+tested on this Mac. The manual reuse tools already provide useful components
+for an automatic reference validation and repair controller.
+
+After setup, reproduce the fixed movie-only experiment with one command from
+the repository root. The output directory must be new:
+
+```sh
+tmux new-session -d -s havc-quality 'cd /Users/darksca/ColorIt && PYTHONPATH="$PWD" tmp/adapter_compare_90_120/env/bin/python -u -m experiments.adapter_compare.havc_quality --source deep_rem.mp4 --output tmp/adapter_compare_90_120/steelman/reproduction --width 640 --cache-text-weights'
+```
+
+`--prompt` supplies one palette instruction for every automatic anchor. The
+exact evaluated prompt is in `steelman/palette_automatic/protocol.json` under
+the artifact directory. This is a 90–120 second experiment runner, not a general
+whole-movie CLI. Assisted reproduction uses the accepted manifest and command
+recorded in `steelman/assisted_final/protocol.json`.
+
+Qwen runs its released BF16 transformer through MLX, the original text encoder
+and **CPU FP32 VAE**. Keep the VAE on CPU to avoid the observed MPS numerical
+corruption. A fresh native MPS wide-image check reproduces the same composition
+problem, with pixel MAE 5.897/255 against MLX; it does not establish CUDA parity.
+The exact text-weight cache separately passes a byte-identical PNG check.
+CMNET2 uses tested MPS adaptations, PNG anchors and Lab lightness restoration,
+which differ from the native GUI JPEG/YUV path. No whole-project ceiling or
+universal FLUX/Qwen ranking is claimed.
+
+All primary cases were inspected through 750 consecutive decoded frames and
+five cut neighborhoods. Each HAVC output is 1080p, 750 frames at 25 fps with
+30 seconds of original audio, below the 16,867,622-byte cap. Mypy, Ruff and all
+70 tests passed after the final GPU run. All coloring and GPU tests ran serially
+in tmux under `gpu_guard`; minimum recorded available memory was 159.3 GiB.
+An initial low-cap full-resolution MPS allocation failed cleanly; the bounded
+larger-cap rerun completed. No branches or worktrees were created.
+
+## Earlier adapter comparison, retained for history
 
 - HAVC code audit is in `havc_audit.json`. The learned CMNET2 model matches our
   tested family, but default resolution, reference memory and shot resets differ.

@@ -55,7 +55,8 @@ def run(options: Options) -> int:
     if options.prompt is not None:
         commands[2].extend(["--prompt", options.prompt])
     protocol.write_text(json.dumps({**options.model_dump(mode="json"), "commands": commands,
-        "automatic_policy": "Frozen whole-clip GUI extraction with shipped second-reference copy over first, native .95/50 DINOv3 dedup, one fixed generic prompt and seed42, single-image native six-step Qwen2.1/Viggle, continuous CMNET2 memory. No reference or palette curation after launch.",
+        "automatic_policy": "Frozen whole-clip GUI extraction with shipped second-reference copy over first, native .95/50 DINOv3 dedup, one fixed prompt and seed42, single-image native six-step Qwen2.1/Viggle, continuous CMNET2 memory. No reference or palette curation after launch.",
+        "palette_input": "One supplied global prompt" if options.prompt else "Movie-only author prompt",
         "upstream": "HAVC 6accc5d image backend + 666b7d4 bundled vscmnet2 1.2.1 selection",
         "manual_intervention_during_run": False}, indent=2) + "\n")
     started = perf_counter()

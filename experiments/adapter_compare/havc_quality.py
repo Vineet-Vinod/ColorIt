@@ -18,6 +18,8 @@ class Options(BaseModel):
     width: int = Field(default=1920, ge=384, le=1920)
     enhance_prompt: bool = False
     cache_text_weights: bool = False
+    permanent_window: int = Field(default=20, ge=2, le=500, multiple_of=2)
+    proximity_bias: bool = False
 
 
 def run(options: Options) -> int:
@@ -40,12 +42,15 @@ def run(options: Options) -> int:
         [".venv/bin/python", "-u", "-m", "experiments.adapter_compare.havc_video",
          "--source", str(options.source.resolve()), "--references", str(references),
          "--manifest", str(folder / "references.json"), "--output", str(folder / "output.mp4"),
-         "--mode", "automatic", "--width", str(options.width)],
+         "--mode", "automatic", "--width", str(options.width),
+         "--permanent-window", str(options.permanent_window)],
     ]
     if options.enhance_prompt:
         commands[2].append("--enhance-prompt")
     if options.cache_text_weights:
         commands[2].append("--cache-text-weights")
+    if options.proximity_bias:
+        commands[3].append("--proximity-bias")
     protocol.write_text(json.dumps({**options.model_dump(mode="json"), "commands": commands,
         "automatic_policy": "Frozen whole-clip GUI extraction with shipped second-reference copy over first, native .95/50 DINOv3 dedup, one fixed generic prompt and seed42, single-image native six-step Qwen2.1/Viggle, continuous CMNET2 memory. No reference or palette curation after launch.",
         "upstream": "HAVC 6accc5d image backend + 666b7d4 bundled vscmnet2 1.2.1 selection",
@@ -70,4 +75,6 @@ if __name__ == "__main__":
     parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--enhance-prompt", action="store_true")
     parser.add_argument("--cache-text-weights", action="store_true")
+    parser.add_argument("--permanent-window", type=int, default=20)
+    parser.add_argument("--proximity-bias", action="store_true")
     raise SystemExit(run(Options.model_validate(vars(parser.parse_args()))))

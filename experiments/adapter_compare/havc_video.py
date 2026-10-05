@@ -52,6 +52,7 @@ class Options(BaseModel):
     width: int | None = Field(default=None, ge=384, le=1920)
     shot_references: bool = False
     proximity_bias: bool = False
+    permanent_window: int = Field(default=20, ge=2, le=500, multiple_of=2)
 
     @model_validator(mode="after")
     def check_inputs(self) -> Options:
@@ -225,7 +226,7 @@ def propagate(options: Options) -> None:
         scenes = Scenes.model_validate_json(options.scenes.read_text())
         boundaries = sorted(set(boundaries + [frame for frame in scenes.scene_boundaries
                                              if boundaries[0] < frame < boundaries[-1]]))
-    window_size = min(20, len(bank) // 2 * 2)
+    window_size = min(options.permanent_window, len(bank) // 2 * 2)
     next_reference = window_size
     half_index = max(0, round(window_size * 0.5) - 1)
     if options.mode == "automatic":
@@ -323,6 +324,7 @@ def main() -> None:
     parser.add_argument("--width", type=int)
     parser.add_argument("--shot-references", action="store_true")
     parser.add_argument("--proximity-bias", action="store_true")
+    parser.add_argument("--permanent-window", type=int, default=20)
     propagate(Options.model_validate(vars(parser.parse_args())))
 
 

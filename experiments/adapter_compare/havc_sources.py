@@ -118,7 +118,7 @@ def extract(options: Options) -> None:
     options.output.mkdir(parents=True, exist_ok=True)
     if options.mode == "automatic":
         frames = automatic_frames(options)
-        method = "Unmodified author's SceneDetectEdges; native vs_cmnet2dit defaults"
+        method = "Author SceneDetectEdges; GUI thresholds" if options.gui else "Author SceneDetectEdges; native vs_cmnet2dit defaults"
     else:
         saved = SceneManifest.model_validate_json(options.scenes.read_text())
         end = options.start + options.frames
@@ -153,7 +153,7 @@ def extract(options: Options) -> None:
               "first_reference_copied_from": frames[1] if options.duplicate_first else None,
               "references": records, "reference_count": len(records),
               "reference_input_resize": "VapourSynth Spline36 512×288 before DiT" if options.mode == "automatic" and not options.gui else "Original 1920×1080",
-              "pairing": "Adjacent sorted references; final odd reference is a single",
+              "pairing": "Chosen by the image runner; extraction does not colorize references",
               "automatic_defaults": {"sc_thresh": 0.035, "sc_tht_ssim": 0.80,
                                      "sc_min_int": 25, "sc_tht_offset": 2,
                                      "sc_min_freq": 0} if options.mode == "automatic" else None}

@@ -50,9 +50,13 @@ class Options(BaseModel):
     prepare_resize: bool = False
     budget_bytes: int = Field(default=16867622, gt=0)
     width: int | None = Field(default=None, ge=384, le=1920)
+    shot_references: bool = False
+    proximity_bias: bool = False
 
     @model_validator(mode="after")
     def check_inputs(self) -> Options:
+        if self.shot_references and self.mode != "assisted":
+            raise ValueError("Shot reference selection requires assisted mode")
         for path in (self.source, self.manifest):
             if not path.is_file():
                 raise ValueError(f"Missing input: {path}")
@@ -191,7 +195,7 @@ def propagate(options: Options) -> None:
         image_size=-1, vid_length=max(options.frames, 100), encode_mode=2,
         max_memory_frames=1000, reset_on_ref_update=False,
         project_dir=str(TESTED / "mps_source"), backbone="dinov3",
-        enable_proximity_bias=False,
+        enable_proximity_bias=options.proximity_bias, proximity_bias_alpha=0.5,
     ))
     network = cast(torch.nn.Module, model.network)
     devices = {parameter.device.type for parameter in network.parameters()}
@@ -210,9 +214,9 @@ def propagate(options: Options) -> None:
             rgb = original.convert("RGB")
         return rgb.resize(dimensions, Image.Resampling.BILINEAR)
 
-    def preload(references: list[Reference]) -> None:
+    def preload(references: list[Reference], offset: int = options.start) -> None:
         for reference in references:
-            model.preload_reference(image(reference), frame_idx=reference.frame-options.start)
+            model.preload_reference(image(reference), frame_idx=reference.frame-offset)
             torch.mps.synchronize()
             torch.mps.empty_cache()
 
@@ -244,9 +248,13 @@ def propagate(options: Options) -> None:
                 model.frame_count = 0
                 model.total_colored_frames = 0
                 model.first_mask_loaded = False
-                preload(bank)
-            first = bank[0] if options.mode == "automatic" else min(
-                bank, key=lambda reference: abs(reference.frame - begin))
+                shot_bank = [reference for reference in bank if begin <= reference.frame < end]
+                active_bank = shot_bank if options.shot_references and shot_bank else bank
+                preload(active_bank, begin)
+            else:
+                active_bank = bank
+            first = active_bank[0] if options.mode == "automatic" else min(
+                active_bank, key=lambda reference: abs(reference.frame - begin))
             for frame in range(begin, end):
                 index = frame - options.start
                 if options.mode == "automatic" and frame > bank[half_index].frame and next_reference < len(bank):
@@ -294,6 +302,9 @@ def propagate(options: Options) -> None:
               "render_vivid": False, "retry_threshold": 0.0,
               "mps_memory_fraction": memory_fraction,
               "contiguous_topk": os.environ.get("CMNET_CONTIGUOUS_TOPK") == "1",
+              "shot_references": options.shot_references,
+              "proximity_bias": options.proximity_bias,
+              "proximity_bias_alpha": 0.5,
               "resize": "bilinear" if options.mode == "assisted" else "VapourSynth Spline36"}
     options.output.with_suffix(".json").write_text(json.dumps(result, indent=2)+"\n")
     print(result, flush=True)
@@ -310,6 +321,8 @@ def main() -> None:
     parser.add_argument("--budget-bytes", type=int, default=16867622)
     parser.add_argument("--prepare-resize", action="store_true")
     parser.add_argument("--width", type=int)
+    parser.add_argument("--shot-references", action="store_true")
+    parser.add_argument("--proximity-bias", action="store_true")
     propagate(Options.model_validate(vars(parser.parse_args())))
 
 

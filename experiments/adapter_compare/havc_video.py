@@ -53,6 +53,7 @@ class Options(BaseModel):
     shot_references: bool = False
     proximity_bias: bool = False
     permanent_window: int = Field(default=20, ge=2, le=500, multiple_of=2)
+    memory_policy: Literal["dit", "gui"] = "dit"
 
     @model_validator(mode="after")
     def check_inputs(self) -> Options:
@@ -226,7 +227,9 @@ def propagate(options: Options) -> None:
         scenes = Scenes.model_validate_json(options.scenes.read_text())
         boundaries = sorted(set(boundaries + [frame for frame in scenes.scene_boundaries
                                              if boundaries[0] < frame < boundaries[-1]]))
-    window_size = min(options.permanent_window, len(bank) // 2 * 2)
+    available_references = len(bank) if options.memory_policy == "gui" else len(bank) // 2 * 2
+    window_size = min(options.permanent_window, available_references)
+    slide_step = 1 if options.memory_policy == "gui" else 2
     next_reference = window_size
     half_index = max(0, round(window_size * 0.5) - 1)
     if options.mode == "automatic":
@@ -259,8 +262,8 @@ def propagate(options: Options) -> None:
             for frame in range(begin, end):
                 index = frame - options.start
                 if options.mode == "automatic" and frame > bank[half_index].frame and next_reference < len(bank):
-                    model.slide_permanent_memory(2)
-                    added = bank[next_reference:next_reference + 2]
+                    model.slide_permanent_memory(slide_step)
+                    added = bank[next_reference:next_reference + slide_step]
                     preload(added)
                     next_reference += len(added)
                     half_index = min(half_index + len(added), len(bank) - 1)
@@ -306,6 +309,8 @@ def propagate(options: Options) -> None:
               "shot_references": options.shot_references,
               "proximity_bias": options.proximity_bias,
               "proximity_bias_alpha": 0.5,
+              "memory_policy": options.memory_policy,
+              "permanent_slide_step": slide_step,
               "resize": "bilinear" if options.mode == "assisted" else "VapourSynth Spline36"}
     options.output.with_suffix(".json").write_text(json.dumps(result, indent=2)+"\n")
     print(result, flush=True)
@@ -325,6 +330,7 @@ def main() -> None:
     parser.add_argument("--shot-references", action="store_true")
     parser.add_argument("--proximity-bias", action="store_true")
     parser.add_argument("--permanent-window", type=int, default=20)
+    parser.add_argument("--memory-policy", choices=("dit", "gui"), default="dit")
     propagate(Options.model_validate(vars(parser.parse_args())))
 
 

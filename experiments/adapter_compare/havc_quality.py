@@ -43,7 +43,7 @@ def run(options: Options) -> int:
          "--source", str(options.source.resolve()), "--references", str(references),
          "--manifest", str(folder / "references.json"), "--output", str(folder / "output.mp4"),
          "--mode", "automatic", "--width", str(options.width),
-         "--permanent-window", str(options.permanent_window)],
+         "--permanent-window", str(options.permanent_window), "--memory-policy", "gui"],
     ]
     if options.enhance_prompt:
         commands[2].append("--enhance-prompt")

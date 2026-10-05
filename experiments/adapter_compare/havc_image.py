@@ -7,9 +7,14 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    import torch
 
 DEFAULT_PROMPT = (
     "Add color to this black-and-white image without hesitation regarding the appropriate colors. "
@@ -32,6 +37,26 @@ class InputReference(BaseModel):
     source_path: Path | None = None
     prompt: str | None = None
     seed: int = 42
+
+
+def cached_dequantizer(
+    original: Callable[[torch.Tensor | None, torch.dtype], torch.Tensor | None],
+) -> Callable[[torch.Tensor | None, torch.dtype], torch.Tensor | None]:
+    cached_key: tuple[int, torch.dtype, torch.device] | None = None
+    cached_value: torch.Tensor | None = None
+
+    def get_weight(tensor: torch.Tensor | None, dtype: torch.dtype) -> torch.Tensor | None:
+        nonlocal cached_key, cached_value
+        if tensor is None:
+            return original(tensor, dtype)
+        key = (tensor.data_ptr(), dtype, tensor.device)
+        if key != cached_key:
+            cached_value = None
+            cached_value = original(tensor, dtype)
+            cached_key = key
+        return cached_value
+
+    return get_weight
 
 
 def main() -> None:
@@ -67,6 +92,7 @@ def main() -> None:
     parser.add_argument("--precision", choices=["bf16", "int8"], default="bf16")
     parser.add_argument("--enhance-prompt", action="store_true")
     parser.add_argument("--preserve-colors", action="store_true")
+    parser.add_argument("--cache-text-weights", action="store_true")
     parser.add_argument(
         "--check",
         action="store_true",
@@ -232,6 +258,25 @@ def main() -> None:
         vae_name=vae.name,
         clip_mmproj=str(projector),
     )
+    cached_linears = 0
+    if args.cache_text_weights:
+        with torch.inference_mode():
+            for module in pipeline["clip"].cond_stage_model.modules():
+                quantized = getattr(module, "is_ggml_quantized", None)
+                get_weight = getattr(module, "get_weight", None)
+                if not isinstance(module, torch.nn.Linear) or not callable(quantized) or not quantized():
+                    continue
+                if not callable(get_weight):
+                    raise TypeError("Quantized text layer lacks its native dequantizer")
+                probe = torch.linspace(-1, 1, module.in_features, device="mps", dtype=torch.float32).unsqueeze(0)
+                expected = module(probe)
+                module.__dict__["get_weight"] = cached_dequantizer(get_weight)
+                actual = module(probe)
+                if not torch.equal(expected, actual):
+                    raise RuntimeError("Cached text linear failed exact FP32 output parity")
+                cached_linears += 1
+                torch.mps.synchronize()
+        print("Cached quantized text linears with exact FP32 parity:", cached_linears, flush=True)
     if args.backend == "mlx":
         from comfy.patcher_extension import WrappersMP
 
@@ -245,6 +290,21 @@ def main() -> None:
     from .havc_numerics import guard_pipeline
 
     guard_pipeline(pipeline, pipeline["model"].model.diffusion_model)
+    enhancement_records: list[dict[str, str | float | bool]] = []
+    if args.enhance_prompt:
+        bridge = importlib.import_module("comfy_bridge")
+        original_enhance = bridge._viggle_enhance_prompt
+
+        def enhance(clip: object, image_tensor: torch.Tensor, prompt: str, seed: int = 42) -> str:
+            began = time.monotonic()
+            rewritten = str(original_enhance(clip, image_tensor, prompt, seed=seed))
+            entry: dict[str, str | float | bool] = {"input_prompt": prompt, "rewritten_prompt": rewritten,
+                     "changed": rewritten != prompt, "seconds": time.monotonic() - began}
+            enhancement_records.append(entry)
+            print("Prompt enhancement", json.dumps(entry), flush=True)
+            return rewritten
+
+        bridge.__dict__["_viggle_enhance_prompt"] = enhance
     load_seconds = time.monotonic() - start
     elapsed = 0.0
     references = []
@@ -344,6 +404,8 @@ def main() -> None:
         "paired": args.paired,
         "preserve_input_colors": args.preserve_colors,
         "enhance_prompt": args.enhance_prompt,
+        "cached_text_linears": cached_linears,
+        "prompt_enhancement_records": enhancement_records,
         "prompts": prompts,
         "seeds": seeds,
         "load_seconds": load_seconds,

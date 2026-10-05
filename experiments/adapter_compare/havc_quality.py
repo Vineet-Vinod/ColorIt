@@ -31,7 +31,7 @@ def run(options: Options) -> int:
     references = folder / "references"
     commands = [
         ["tmp/havc_cpu/.venv/bin/python", "-u", "-m", "experiments.adapter_compare.havc_sources",
-         "--source", str(options.source.resolve()), "--output", str(candidates), "--mode", "automatic", "--gui"],
+         "--source", str(options.source.resolve()), "--output", str(candidates), "--mode", "automatic", "--gui", "--duplicate-first"],
         ["tmp/havc_cpu/.venv/bin/python", "-u", "-m", "experiments.adapter_compare.havc_selection",
          "--input-manifest", str(candidates / "input_manifest.json"), "--output", str(selected)],
         ["tmp/adapter_compare_90_120/havc_env/bin/python", "-u", "-m", "experiments.adapter_compare.havc_image",
@@ -47,7 +47,7 @@ def run(options: Options) -> int:
     if options.cache_text_weights:
         commands[2].append("--cache-text-weights")
     protocol.write_text(json.dumps({**options.model_dump(mode="json"), "commands": commands,
-        "automatic_policy": "Frozen whole-clip GUI extraction, native .95/50 DINOv3 dedup, one fixed generic prompt and seed42, single-image native six-step Qwen2.1/Viggle, continuous CMNET2 memory. No reference or palette curation after launch.",
+        "automatic_policy": "Frozen whole-clip GUI extraction with shipped second-reference copy over first, native .95/50 DINOv3 dedup, one fixed generic prompt and seed42, single-image native six-step Qwen2.1/Viggle, continuous CMNET2 memory. No reference or palette curation after launch.",
         "upstream": "HAVC 6accc5d image backend + 666b7d4 bundled vscmnet2 1.2.1 selection",
         "manual_intervention_during_run": False}, indent=2) + "\n")
     started = perf_counter()

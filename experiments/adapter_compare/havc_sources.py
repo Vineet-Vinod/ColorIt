@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import shutil
 import sys
 import types
 from itertools import pairwise
@@ -28,6 +29,7 @@ class Options(BaseModel):
     frames: int = Field(default=750, ge=2)
     scenes: Path = ROOT / "experiments/adapter_compare/scene_manifest.json"
     gui: bool = False
+    duplicate_first: bool = False
 
 
 class SceneManifest(BaseModel):
@@ -141,8 +143,14 @@ def extract(options: Options) -> None:
         model_path = options.output / "model_inputs" / path.name if options.mode == "automatic" and not options.gui else path
         records.append({"frame": frame, "source_path": str(path.resolve()), "path": str(model_path.resolve())})
     capture.release()
+    if options.duplicate_first:
+        if not options.gui or len(records) < 2:
+            raise ValueError("First-reference duplication requires GUI extraction and two references")
+        shutil.copyfile(options.output / f"ref_{frames[1]:06d}.png",
+                        options.output / f"ref_{frames[0]:06d}.png")
     result = {"source": str(options.source.resolve()), "start_frame": options.start,
               "frame_count": options.frames, "mode": options.mode, "method": method,
+              "first_reference_copied_from": frames[1] if options.duplicate_first else None,
               "references": records, "reference_count": len(records),
               "reference_input_resize": "VapourSynth Spline36 512×288 before DiT" if options.mode == "automatic" and not options.gui else "Original 1920×1080",
               "pairing": "Adjacent sorted references; final odd reference is a single",
@@ -162,6 +170,7 @@ def main() -> None:
     parser.add_argument("--frames", type=int, default=750)
     parser.add_argument("--scenes", type=Path, default=ROOT / "experiments/adapter_compare/scene_manifest.json")
     parser.add_argument("--gui", action="store_true")
+    parser.add_argument("--duplicate-first", action="store_true")
     extract(Options.model_validate(vars(parser.parse_args())))
 
 

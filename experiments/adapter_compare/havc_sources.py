@@ -27,6 +27,7 @@ class Options(BaseModel):
     start: int = Field(default=2250, ge=0)
     frames: int = Field(default=750, ge=2)
     scenes: Path = ROOT / "experiments/adapter_compare/scene_manifest.json"
+    gui: bool = False
 
 
 class SceneManifest(BaseModel):
@@ -89,7 +90,7 @@ def automatic_frames(options: Options) -> list[int]:
     detected = detector.SceneDetectEdges(
         source, threshold=0.035, frequency=0, ssim_threshold=0.80,
         sc_diff_offset=2, sc_min_int=25, sc_mult_tht=15,
-        tht_white=0.70, tht_black=0.10,
+        tht_white=0.70, tht_black=0.09 if options.gui else 0.10,
     )
     model_source = source.resize.Spline36(width=512, height=288)
     model_inputs = options.output / "model_inputs"
@@ -137,13 +138,13 @@ def extract(options: Options) -> None:
             raise RuntimeError(f"Failed to extract reference frame {frame}")
         path = options.output / f"ref_{frame:06d}.png"
         Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)).save(path)
-        model_path = options.output / "model_inputs" / path.name if options.mode == "automatic" else path
+        model_path = options.output / "model_inputs" / path.name if options.mode == "automatic" and not options.gui else path
         records.append({"frame": frame, "source_path": str(path.resolve()), "path": str(model_path.resolve())})
     capture.release()
     result = {"source": str(options.source.resolve()), "start_frame": options.start,
               "frame_count": options.frames, "mode": options.mode, "method": method,
               "references": records, "reference_count": len(records),
-              "reference_input_resize": "VapourSynth Spline36 512×288 before DiT" if options.mode == "automatic" else "Original 1920×1080",
+              "reference_input_resize": "VapourSynth Spline36 512×288 before DiT" if options.mode == "automatic" and not options.gui else "Original 1920×1080",
               "pairing": "Adjacent sorted references; final odd reference is a single",
               "automatic_defaults": {"sc_thresh": 0.035, "sc_tht_ssim": 0.80,
                                      "sc_min_int": 25, "sc_tht_offset": 2,
@@ -160,6 +161,7 @@ def main() -> None:
     parser.add_argument("--start", type=int, default=2250)
     parser.add_argument("--frames", type=int, default=750)
     parser.add_argument("--scenes", type=Path, default=ROOT / "experiments/adapter_compare/scene_manifest.json")
+    parser.add_argument("--gui", action="store_true")
     extract(Options.model_validate(vars(parser.parse_args())))
 
 

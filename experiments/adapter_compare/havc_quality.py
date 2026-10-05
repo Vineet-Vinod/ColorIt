@@ -20,6 +20,7 @@ class Options(BaseModel):
     cache_text_weights: bool = False
     permanent_window: int = Field(default=20, ge=2, le=500, multiple_of=2)
     proximity_bias: bool = False
+    prompt: str | None = Field(default=None, min_length=1)
 
 
 def run(options: Options) -> int:
@@ -51,6 +52,8 @@ def run(options: Options) -> int:
         commands[2].append("--cache-text-weights")
     if options.proximity_bias:
         commands[3].append("--proximity-bias")
+    if options.prompt is not None:
+        commands[2].extend(["--prompt", options.prompt])
     protocol.write_text(json.dumps({**options.model_dump(mode="json"), "commands": commands,
         "automatic_policy": "Frozen whole-clip GUI extraction with shipped second-reference copy over first, native .95/50 DINOv3 dedup, one fixed generic prompt and seed42, single-image native six-step Qwen2.1/Viggle, continuous CMNET2 memory. No reference or palette curation after launch.",
         "upstream": "HAVC 6accc5d image backend + 666b7d4 bundled vscmnet2 1.2.1 selection",
@@ -77,4 +80,5 @@ if __name__ == "__main__":
     parser.add_argument("--cache-text-weights", action="store_true")
     parser.add_argument("--permanent-window", type=int, default=20)
     parser.add_argument("--proximity-bias", action="store_true")
+    parser.add_argument("--prompt")
     raise SystemExit(run(Options.model_validate(vars(parser.parse_args()))))

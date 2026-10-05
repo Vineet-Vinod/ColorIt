@@ -30,6 +30,8 @@ class InputReference(BaseModel):
     frame: int
     path: Path
     source_path: Path | None = None
+    prompt: str | None = None
+    seed: int = 42
 
 
 def main() -> None:
@@ -64,6 +66,7 @@ def main() -> None:
     parser.add_argument("--backend", choices=["mps", "mlx"], default="mps")
     parser.add_argument("--precision", choices=["bf16", "int8"], default="bf16")
     parser.add_argument("--enhance-prompt", action="store_true")
+    parser.add_argument("--preserve-colors", action="store_true")
     parser.add_argument(
         "--check",
         action="store_true",
@@ -151,6 +154,8 @@ def main() -> None:
         print("CPU import check passed; no model loaded or GPU work started.")
         return
     origins: dict[int, Path] = {}
+    prompts: dict[int, str] = {}
+    seeds: dict[int, int] = {}
     if args.input_manifest:
         if not args.output_dir or not args.reference_manifest:
             parser.error(
@@ -171,6 +176,8 @@ def main() -> None:
         origins = {
             item.frame: (item.source_path or item.path).resolve() for item in inputs
         }
+        prompts = {item.frame: item.prompt or args.prompt for item in inputs}
+        seeds = {item.frame: item.seed for item in inputs}
         jobs = [
             (
                 item.frame,
@@ -205,10 +212,12 @@ def main() -> None:
         mx.set_cache_limit(1024**3)
     os.environ["COMFY_AUTO_DOWNLOAD"] = "0"
     from dit_colorize_main import (
+        colorize_image,
         load_viggle_pipeline,
         process_image,
         process_image_pair,
     )
+    from PIL import Image
 
     for _, source, output in jobs:
         if not source.is_file():
@@ -243,6 +252,8 @@ def main() -> None:
     for begin in range(0, len(jobs), stride):
         batch = jobs[begin : begin + stride]
         if len(batch) == 2:
+            if args.preserve_colors or any(prompts.get(item[0], args.prompt) != args.prompt for item in batch):
+                raise ValueError("Per-reference edits require single-image inference")
             pair_dir = batch[0][2].parent / f"pair_{begin:06d}"
             pair_dir.mkdir(exist_ok=True)
             seconds = process_image_pair(
@@ -270,15 +281,28 @@ def main() -> None:
                     )
         else:
             frame, source, output = batch[0]
-            seconds = process_image(
-                source,
-                output,
-                pipeline,
-                args.prompt,
-                img_size=0,
-                steps=args.steps,
-                enhance_prompt=args.enhance_prompt,
-            )
+            prompt = prompts.get(frame, args.prompt)
+            seed = seeds.get(frame, 42)
+            if args.preserve_colors or seed != 42:
+                image_start = time.monotonic()
+                with Image.open(source) as original:
+                    pixels = original.convert("RGB")
+                if not args.preserve_colors:
+                    pixels = pixels.convert("L").convert("RGB")
+                colored = colorize_image(pipeline, pixels, prompt, args.steps,
+                                         seed=seed, enhance_prompt=args.enhance_prompt)
+                colored.resize(pixels.size, Image.Resampling.LANCZOS).save(output)
+                seconds = time.monotonic() - image_start
+            else:
+                seconds = process_image(
+                    source,
+                    output,
+                    pipeline,
+                    prompt,
+                    img_size=0,
+                    steps=args.steps,
+                    enhance_prompt=args.enhance_prompt,
+                )
             if output.exists() and frame is not None:
                 references.append(
                     ReferenceRecord(
@@ -318,6 +342,10 @@ def main() -> None:
         "seed": 42,
         "resolution": 1280 if args.paired else 1024,
         "paired": args.paired,
+        "preserve_input_colors": args.preserve_colors,
+        "enhance_prompt": args.enhance_prompt,
+        "prompts": prompts,
+        "seeds": seeds,
         "load_seconds": load_seconds,
         "inference_seconds_author_boundary": elapsed,
         "total_seconds": time.monotonic() - start,

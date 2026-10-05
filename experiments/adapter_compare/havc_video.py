@@ -49,6 +49,7 @@ class Options(BaseModel):
     frames: int = Field(default=750, gt=0)
     prepare_resize: bool = False
     budget_bytes: int = Field(default=16867622, gt=0)
+    width: int | None = Field(default=None, ge=384, le=1920)
 
     @model_validator(mode="after")
     def check_inputs(self) -> Options:
@@ -110,6 +111,8 @@ def prepare_resize(options: Options, bank: list[Reference]) -> None:
     vs.core.max_cache_size = 256
     work = options.output.parent / "spline36"
     work.mkdir(parents=True, exist_ok=True)
+    width = options.width or 512
+    height = round(width * 9 / 16 / 2) * 2
 
     def resize(image: NDArray[np.uint8]) -> NDArray[np.uint8]:
         blank = vs.core.std.BlankClip(
@@ -123,14 +126,14 @@ def prepare_resize(options: Options, bank: list[Reference]) -> None:
             return result
 
         clip = blank.std.ModifyFrame(clips=blank, selector=pixels)
-        frame = clip.resize.Spline36(width=512, height=288).get_frame(0)
+        frame = clip.resize.Spline36(width=width, height=height).get_frame(0)
         return np.stack([np.asarray(frame[plane]) for plane in range(3)], axis=-1)
 
     capture = cv2.VideoCapture(str(options.source))
     capture.set(cv2.CAP_PROP_POS_FRAMES, options.start)
     output = np.lib.format.open_memmap(
         work / "source.npy", mode="w+", dtype=np.uint8,
-        shape=(options.frames, 288, 512, 3),
+        shape=(options.frames, height, width, 3),
     )
     try:
         for index in range(options.frames):
@@ -178,7 +181,10 @@ def propagate(options: Options) -> None:
     torch.set_num_threads(4)
     torch.set_num_interop_threads(1)
     torch.manual_seed(0)
-    torch.mps.set_per_process_memory_fraction(0.07)
+    memory_fraction = 0.35 if (options.width or 512) > 960 else 0.07
+    torch.mps.set_per_process_memory_fraction(memory_fraction)
+    if (options.width or 512) > 960:
+        os.environ["CMNET_CONTIGUOUS_TOPK"] = "1"
     cv2.setNumThreads(1)
     patch_softmax(TESTED / "mps_source")
     model = cast(Renderer, ColorMNetRender(
@@ -191,9 +197,10 @@ def propagate(options: Options) -> None:
     devices = {parameter.device.type for parameter in network.parameters()}
     if devices != {"mps"}:
         raise RuntimeError(f"Unexpected CMNET2 parameter devices: {devices}")
-    if options.mode == "assisted":
+    if options.mode == "assisted" or (options.width or 512) > 512:
         importlib.import_module("mps_readout").install()
-    dimensions = (683, 384) if options.mode == "assisted" else (512, 288)
+    width = options.width or (683 if options.mode == "assisted" else 512)
+    dimensions = (width, round(width * 9 / 16 / 2) * 2)
 
     def image(reference: Reference) -> Image.Image:
         path = reference.path
@@ -285,6 +292,8 @@ def propagate(options: Options) -> None:
                               "Source luminance restored in Lab instead of native VapourSynth YUV",
                               "Direct in-process execution instead of CMNET2 RPC"],
               "render_vivid": False, "retry_threshold": 0.0,
+              "mps_memory_fraction": memory_fraction,
+              "contiguous_topk": os.environ.get("CMNET_CONTIGUOUS_TOPK") == "1",
               "resize": "bilinear" if options.mode == "assisted" else "VapourSynth Spline36"}
     options.output.with_suffix(".json").write_text(json.dumps(result, indent=2)+"\n")
     print(result, flush=True)
@@ -300,6 +309,7 @@ def main() -> None:
     parser.add_argument("--frames", type=int, default=750)
     parser.add_argument("--budget-bytes", type=int, default=16867622)
     parser.add_argument("--prepare-resize", action="store_true")
+    parser.add_argument("--width", type=int)
     propagate(Options.model_validate(vars(parser.parse_args())))
 
 

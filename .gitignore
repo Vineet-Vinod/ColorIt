@@ -14,6 +14,8 @@ data/experimental/
 # Model weights and generated media
 models/deoldify/*.pth
 models/ddcolor/*
+models/flux/*
+models/cmnet2/*
 data/colorized/
 data/final/
 data/frames/
@@ -25,3 +27,5 @@ data/eval/
 !data/**/.gitkeep
 !models/deoldify/.gitkeep
 !models/ddcolor/.gitkeep
+!models/flux/.gitkeep
+!models/cmnet2/.gitkeep

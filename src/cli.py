@@ -6,10 +6,7 @@ from pathlib import Path
 import sys
 
 from src.pipeline.config import load_config
-from src.pipeline.image_edit_weights import IMAGE_EDIT_MODELS, download_model_snapshot
-from src.pipeline.keyframes import KEYFRAME_COLORING_MODELS
 from src.pipeline.movie import run_colorize_movie
-from src.pipeline.paths import resolve_project_paths
 from src.pipeline.weights import run_download_weights
 
 
@@ -24,29 +21,6 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="{download-weights,colorize-movie}")
 
     download_parser = subparsers.add_parser("download-weights", help="Download required model weights.")
-    download_parser.add_argument(
-        "--image-edit-model",
-        action="append",
-        choices=tuple(
-            sorted(
-                name
-                for name, model in IMAGE_EDIT_MODELS.items()
-                if model.automatic_download
-            )
-        ),
-        default=[],
-        help="Also download one verified MLX image-edit checkpoint. Repeat to select more than one.",
-    )
-    download_parser.add_argument(
-        "--skip-core",
-        action="store_true",
-        help="Skip the legacy colorization and DeepRemaster checkpoints.",
-    )
-    download_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Download selected files again even when a verified copy exists.",
-    )
     download_parser.set_defaults(handler=handle_download_weights)
 
     movie_parser = subparsers.add_parser("colorize-movie", help="Run the full movie pipeline.")
@@ -61,50 +35,16 @@ def add_movie_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", default=None, help="Defaults to the input path with '_color' appended.")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument(
-        "--keep-intermediates",
-        action="store_true",
-        help="Preserve scene clips, colored keyframes, and run manifests after completion.",
-    )
-    parser.add_argument(
-        "--pipeline",
-        choices=("default", "deepremaster"),
-        default="default",
-        help="Use the existing pipeline or DeepRemaster with scene keyframes.",
-    )
-    parser.add_argument(
-        "--coloring-model",
-        choices=KEYFRAME_COLORING_MODELS,
-        default="deoldify",
-        help=(
-            "Image colorizer used for DeepRemaster scene keyframes. "
-            "The short names select DeOldify Artistic and DDColor ModelScope."
-        ),
-    )
 
 
 def handle_download_weights(args: argparse.Namespace) -> int:
     config_path = DEFAULT_MOVIE_CONFIG
-    config = load_config(config_path)
-    if not args.skip_core:
-        run_download_weights(
-            config=config,
-            config_path=config_path,
-            url_override=None,
-            force=bool(args.force),
-        )
-    paths = resolve_project_paths(config)
-    for model_name in args.image_edit_model:
-        print(f"Downloading verified image-edit model: {model_name}")
-        download_model_snapshot(
-            model_name,
-            paths.root / "models" / "image-edit",
-            manifest_path=paths.manifest_dir / "weights.json",
-            force=bool(args.force),
-        )
-    if args.skip_core and not args.image_edit_model:
-        raise ValueError("--skip-core requires at least one --image-edit-model")
-    return 0
+    return run_download_weights(
+        config=load_config(config_path),
+        config_path=config_path,
+        url_override=None,
+        force=False,
+    )
 
 
 def handle_colorize_movie(args: argparse.Namespace) -> int:
@@ -113,12 +53,10 @@ def handle_colorize_movie(args: argparse.Namespace) -> int:
         movie_path=Path(args.input),
         output_path=Path(args.output) if args.output else None,
         scene_threshold=None,
-        keep_intermediates=bool(args.keep_intermediates),
+        keep_intermediates=False,
         resume=bool(args.resume),
         limit=None,
         overwrite=bool(args.overwrite),
-        pipeline=str(args.pipeline),
-        coloring_model=str(args.coloring_model),
     )
 
 
@@ -132,8 +70,6 @@ def run_movie(
     resume: bool,
     limit: int | None,
     overwrite: bool,
-    pipeline: str = "default",
-    coloring_model: str = "deoldify",
 ) -> int:
     return run_colorize_movie(
         config=load_config(config_path),
@@ -145,8 +81,6 @@ def run_movie(
         resume=resume,
         limit=limit,
         overwrite=overwrite,
-        pipeline=pipeline,
-        coloring_model=coloring_model,
     )
 
 

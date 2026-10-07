@@ -14,42 +14,6 @@ runtime:
   cleanup_frames: true
   cleanup_scene_clips: true
 
-deep_remaster:
-  scene_threshold: 0.25
-  keyframe_positions: [0.2, 0.5, 0.8]
-  deoldify_render_factor: 45
-  deoldify_stable_render_factor: 35
-  ddcolor_input_size: 512
-  image_edit:
-    width: 1024
-    height: 576
-    quantize: 8
-    seed: 101
-    flux_steps: 4
-    flux_batch_size: 8
-    qwen_steps: 20
-    firered_steps: 20
-    qwen_guidance: 2.5
-    palette_anchor: false
-    scene_palettes: {}
-    align_reference_luma: true
-  precision: float16
-  min_dimension: 384
-  reference_min_dimension: 384
-  temporal_block_size: 5
-  restoration_strength: 1.0
-  chroma_gain: 1.0
-  target_chroma_ratio: 0.95
-  max_chroma_gain: 2.0
-  lab_backend: opencv
-  compile: true
-  dense_max_scores: 32000000
-  source_tile_size: 1024
-  reference_tile_size: 2048
-  intermediate_crf: 12
-  intermediate_preset: fast
-  intermediate_pixel_format: yuv444p
-
 video:
   output_codec: libx264
   crf: 16
@@ -57,10 +21,10 @@ video:
 
 compression:
   video_codec: libx264
-  preset: medium
-  crf: 27
-  max_size_multiplier: 2.0
-  retry_crfs: [28, 30]
+  preset: veryfast
+  crf: 20
+  max_size_multiplier: 1.5
+  retry_crfs: [23, 26, 28]
   audio_codec: aac
   audio_bitrate: 160k
   faststart: true

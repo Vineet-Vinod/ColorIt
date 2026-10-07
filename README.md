@@ -49,9 +49,8 @@ The longer-term opportunity is broader than colorization. The same local, AI-ass
 - **Live progress and ETA** for frame processing, FFmpeg stages, and duration-weighted scene batches.
 - **Original audio preservation** during final scene assembly.
 - **Timing safety checks** covering frame count, frame rate, and duration before a run is accepted as complete.
-- **Size-aware delivery** with H.264 compression retries targeting at most `2x` the input size by default.
+- **Size-aware delivery** with H.264 compression retries targeting at most `1.5x` the input size by default.
 - **Automatic cleanup** of intermediate clips and manifests after successful runs.
-- **Reference-guided DeepRemaster mode** using three scene-relative DDColor or DeOldify keyframes per detected scene and an optimized MLX temporal model.
 
 ## Architecture
 
@@ -74,7 +73,7 @@ Manifests track each long-running stage. With `--resume`, already completed scen
 | Layer | Technology | Role |
 |---|---|---|
 | Language and packaging | Python 3.11, `uv` | Reproducible local installation and CLI |
-| AI runtime | PyTorch, TorchVision, MLX | Image colorization and Apple Silicon temporal inference |
+| AI runtime | PyTorch, TorchVision | Model loading and inference |
 | AI colorization | DeOldify Video, DDColor | Complementary frame color hypotheses |
 | Image processing | OpenCV, NumPy, Pillow | CLAHE, Lab conversion, temporal chroma fusion, frame handling |
 | Video processing | FFmpeg, `ffprobe` | Scene detection, decoding, encoding, audio, assembly, compression |
@@ -109,7 +108,7 @@ Codex accelerated research, implementation, debugging, and documentation; human 
 - [`uv`](https://docs.astral.sh/uv/)
 - `ffmpeg` and `ffprobe` on `PATH`
 - A PyTorch-supported computer
-- Enough free disk space for approximately 2.5 GB of model weights plus temporary video files
+- Enough free disk space for approximately 1.7 GB of model weights plus temporary video files
 
 Apple Silicon MPS is used when available, with CPU fallback. Apple Silicon or a high-end desktop CPU completes movies much faster, but a normal laptop can run the included one-minute demonstration on CPU.
 
@@ -128,7 +127,7 @@ uv sync
 uv run colorit download-weights
 ```
 
-The command installs the DeOldify Video and Artistic checkpoints, DDColor, and DeepRemaster. Downloads use HTTPS and temporary files. The Artistic and DeepRemaster artifacts must match pinned sizes and SHA-256 checksums before ColorIt accepts them.
+Weights are downloaded to `models/deoldify/ColorizeVideo_gen.pth` and `models/ddcolor/pytorch_model.bin`.
 
 ## Reproduce the Demo
 
@@ -169,23 +168,6 @@ uv run colorit colorize-movie \
   --resume \
   --overwrite
 ```
-
-Run reference-guided temporal restoration with vivid DDColor ModelScope keyframes:
-
-```bash
-uv run colorit colorize-movie \
-  --input /path/to/movie.mp4 \
-  --output /path/to/movie_deepremaster_ddcolor.mp4 \
-  --pipeline deepremaster \
-  --coloring-model ddcolor \
-  --overwrite
-```
-
-The legacy keyframe choices are `ddcolor`, `ddcolor_artistic`, `deoldify`, and `deoldify_stable`. None is recommended as a high-quality reference generator for ornate live-action footage. Visual review found broad pink or green casts in DDColor output and muted beige or olive palettes in DeOldify output. Earlier measurements that favored DeOldify Stable described low chroma variation and faithful propagation of its own references; they did not measure whether the colors looked plausible. Those measurements must not be read as a quality ranking.
-
-DeepRemaster mode detects scenes, colors references at 20%, 50%, and 80% of every scene by default, then restores and propagates color through five-frame temporal blocks. This gives the model multiple costume and lighting views without crossing scene boundaries. Set `deep_remaster.keyframe_positions` in the config to another non-empty list of positions from `0.0` through `1.0`; a one-item list keeps the original single-reference artifact naming and behavior. Add `--keep-intermediates` to preserve every source and colored keyframe for inspection. The mode preserves the source frame rate and audio and uses the normal size-aware final assembly.
-
-The MLX port stores tensors in native channels-last order, folds inference batch normalization into 3D convolutions, caches reference encodings plus key/value projections, compiles the graph, and uses exact tiled online-softmax attention when a dense attention map would be too large. The quality-tested default uses FP16, a 384-pixel short edge for both source and references, DDColor input size 512, DeOldify render factor 45, and the released model's five-frame temporal blocks. A short calibration pass measures raw output chroma at the three reference times and applies a bounded per-scene gain to target 95% of reference chroma. This avoids the severe scene-dependent washout produced by one fixed gain. High-quality 4:4:4 scene intermediates are concatenated without an unnecessary normalization encode, followed by one 4:2:0 delivery encode.
 
 By default, output is written next to the input with `_color` appended. The public CLI intentionally exposes only `download-weights` and `colorize-movie`; internal experimental flags are not part of the launch interface.
 

@@ -61,37 +61,28 @@ def run_assemble_final(
             raise FileNotFoundError(f"Missing colorized scene clip: {clip_path}")
         expected_scene_frames = int(round(float(scene["duration_seconds"]) * fps_value))
         normalized_clip_path = assembly_scene_dir / clip_path.name
-        if _clip_matches_frame_count(clip_path, expected_scene_frames, expected_fps=fps):
-            assembly_clip_path = clip_path
-        else:
-            if not _clip_matches_frame_count(
-                normalized_clip_path,
-                expected_scene_frames,
-                source_path=clip_path,
-                expected_fps=fps,
-            ):
-                normalize_silent_cfr_video(
-                    input_path=clip_path,
-                    output_path=normalized_clip_path,
-                    fps=fps,
-                    frame_count=expected_scene_frames,
-                    video_codec=str(
-                        config.compression.get(
-                            "video_codec", config.raw["video"]["output_codec"]
-                        )
-                    ),
-                    crf=int(config.compression.get("crf", config.raw["video"]["crf"])),
-                    pixel_format=str(config.raw["video"]["pixel_format"]),
-                    preset=str(config.compression.get("preset", "veryfast")),
-                    progress_label=f"Assembly: normalize {scene['scene_id']}",
-                )
-            assembly_clip_path = normalized_clip_path
-        lines.append(f"file '{assembly_clip_path.as_posix()}'")
+        if not _clip_matches_frame_count(
+            normalized_clip_path,
+            expected_scene_frames,
+            source_path=clip_path,
+        ):
+            normalize_silent_cfr_video(
+                input_path=clip_path,
+                output_path=normalized_clip_path,
+                fps=fps,
+                frame_count=expected_scene_frames,
+                video_codec=str(config.compression.get("video_codec", config.raw["video"]["output_codec"])),
+                crf=int(config.compression.get("crf", config.raw["video"]["crf"])),
+                pixel_format=str(config.raw["video"]["pixel_format"]),
+                preset=str(config.compression.get("preset", "veryfast")),
+                progress_label=f"Assembly: normalize {scene['scene_id']}",
+            )
+        lines.append(f"file '{normalized_clip_path.as_posix()}'")
         assembly_items.append(
             {
                 "index": index,
                 "scene_id": scene["scene_id"],
-                "clip_path": str(assembly_clip_path),
+                "clip_path": str(normalized_clip_path),
                 "source_clip_path": str(clip_path),
                 "frame_count": expected_scene_frames,
             }
@@ -146,21 +137,12 @@ def run_assemble_final(
     return 0
 
 
-def _clip_matches_frame_count(
-    path: Path,
-    frame_count: int,
-    *,
-    source_path: Path | None = None,
-    expected_fps: str | None = None,
-) -> bool:
+def _clip_matches_frame_count(path: Path, frame_count: int, *, source_path: Path) -> bool:
     if not path.exists() or path.stat().st_size <= 0:
         return False
-    if source_path is not None and source_path.exists() and path.stat().st_mtime < source_path.stat().st_mtime:
+    if source_path.exists() and path.stat().st_mtime < source_path.stat().st_mtime:
         return False
     try:
-        media = ffprobe_media(path)
-        if int(media.get("frame_count", 0)) != frame_count:
-            return False
-        return expected_fps is None or str(media["fps"]) == str(expected_fps)
+        return int(ffprobe_media(path).get("frame_count", 0)) == frame_count
     except Exception:
         return False

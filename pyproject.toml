@@ -5,22 +5,13 @@ description = "Movie-first DeOldify pipeline for black-and-white film colorizati
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
-  "mlx>=0.29,<1",
   "numpy>=1.26,<3",
   "opencv-python-headless>=4.10,<5",
-  "scikit-image>=0.25,<1",
-  "Pillow>=12.3,<13",
+  "Pillow>=10,<12",
   "PyYAML>=6.0,<7.0",
   "torch>=2.6,<3",
   "torchvision>=0.21,<1",
   "tqdm>=4.67,<5",
-]
-
-[project.optional-dependencies]
-# Native MLX image editors are large and optional. MFLUX supplies the shared
-# Qwen Image Edit, FireRed, and FLUX.2 kernels used by the local adapters.
-image-edit = [
-  "mflux==0.19.1",
 ]
 
 [project.scripts]
@@ -35,10 +26,3 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 include = ["src", "src.*"]
-
-[tool.taskipy.tasks]
-experiment-types = "python -m mypy --follow-imports skip --ignore-missing-imports experiments/adapter_compare"
-experiment-lint = "python -m ruff check experiments/adapter_compare tests/test_ltx_mlx.py tests/test_adapter_windows.py tests/test_havc_mlx.py"
-experiment-tests = "python -m pytest tests/test_ltx_mlx.py tests/test_adapter_windows.py -q"
-havc-tests = "tmp/adapter_compare_90_120/havc_env/bin/python -m pytest tests/test_havc_mlx.py -q"
-experiment-ci = "task experiment-types && task experiment-lint && task experiment-tests && task havc-tests && .venv/bin/python -m pytest tests --ignore=tests/test_ltx_mlx.py --ignore=tests/test_adapter_windows.py --ignore=tests/test_havc_mlx.py -q"

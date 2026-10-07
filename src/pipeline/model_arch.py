@@ -229,11 +229,6 @@ def create_resnet101_body() -> nn.Sequential:
     return nn.Sequential(*list(backbone.children())[:-2])
 
 
-def create_resnet34_body() -> nn.Sequential:
-    backbone = models.resnet34(weights=None)
-    return nn.Sequential(*list(backbone.children())[:-2])
-
-
 def _get_sfs_idxs(sizes: list[torch.Size]) -> list[int]:
     feature_sizes = [shape[-1] for shape in sizes]
     sfs_idxs = list(np.where(np.array(feature_sizes[:-1]) != np.array(feature_sizes[1:]))[0])
@@ -303,123 +298,6 @@ class UnetBlockWide(nn.Module):
             up_out = F.interpolate(up_out, skip.shape[-2:], mode="nearest")
         cat = self.relu(torch.cat([up_out, self.bn(skip)], dim=1))
         return self.conv(cat)
-
-
-class UnetBlockDeep(nn.Module):
-    def __init__(
-        self,
-        up_in_c: int,
-        x_in_c: int,
-        hook: Hook,
-        final_div: bool = True,
-        blur: bool = False,
-        leaky: float | None = None,
-        self_attention: bool = False,
-        nf_factor: float = 1.0,
-        **kwargs,
-    ):
-        super().__init__()
-        self.hook = hook
-        self.shuf = CustomPixelShuffleICNR(
-            up_in_c,
-            up_in_c // 2,
-            blur=blur,
-            leaky=leaky,
-            **kwargs,
-        )
-        self.bn = batchnorm_2d(x_in_c)
-        ni = up_in_c // 2 + x_in_c
-        nf = int((ni if final_div else ni // 2) * nf_factor)
-        self.conv1 = custom_conv_layer(ni, nf, leaky=leaky, **kwargs)
-        self.conv2 = custom_conv_layer(
-            nf,
-            nf,
-            leaky=leaky,
-            self_attention=self_attention,
-            **kwargs,
-        )
-        self.relu = relu(leaky=leaky)
-
-    def forward(self, up_in: Tensor) -> Tensor:
-        skip = self.hook.stored
-        up_out = self.shuf(up_in)
-        if skip.shape[-2:] != up_out.shape[-2:]:
-            up_out = F.interpolate(up_out, skip.shape[-2:], mode="nearest")
-        cat = self.relu(torch.cat([up_out, self.bn(skip)], dim=1))
-        return self.conv2(self.conv1(cat))
-
-
-class DeoldifyArtisticModel(SequentialEx):
-    """Fastai-v1-compatible DeOldify Artistic image generator."""
-
-    def __init__(self, nf_factor: float = 1.5):
-        encoder = create_resnet34_body()
-        extra_bn = True
-        imsize = (256, 256)
-        sfs_sizes = model_sizes(encoder, size=imsize)
-        sfs_idxs = list(reversed(_get_sfs_idxs(sfs_sizes)))
-        sfs = HookList([encoder[i] for i in sfs_idxs])
-        x = dummy_eval(encoder, imsize).detach()
-
-        ni = int(sfs_sizes[-1][1])
-        middle_conv = nn.Sequential(
-            custom_conv_layer(
-                ni,
-                ni * 2,
-                norm_type=NormType.Spectral,
-                extra_bn=extra_bn,
-            ),
-            custom_conv_layer(
-                ni * 2,
-                ni,
-                norm_type=NormType.Spectral,
-                extra_bn=extra_bn,
-            ),
-        ).eval()
-        x = middle_conv(x)
-        layers: list[nn.Module] = [encoder, batchnorm_2d(ni), nn.ReLU(), middle_conv]
-
-        for i, idx in enumerate(sfs_idxs):
-            not_final = i != len(sfs_idxs) - 1
-            up_in_c = int(x.shape[1])
-            x_in_c = int(sfs_sizes[idx][1])
-            self_attention = i == len(sfs_idxs) - 3
-            unet_block = UnetBlockDeep(
-                up_in_c,
-                x_in_c,
-                sfs[i],
-                final_div=not_final,
-                blur=True,
-                self_attention=self_attention,
-                norm_type=NormType.Spectral,
-                extra_bn=extra_bn,
-                nf_factor=nf_factor,
-            ).eval()
-            layers.append(unet_block)
-            x = unet_block(x)
-
-        ni = int(x.shape[1])
-        if imsize != sfs_sizes[0][-2:]:
-            layers.append(PixelShuffleICNR(ni))
-        layers.append(MergeLayer(dense=True))
-        ni += in_channels(encoder)
-        layers.append(res_block(ni, bottle=False, norm_type=NormType.Spectral))
-        layers.append(
-            custom_conv_layer(
-                ni,
-                3,
-                ks=1,
-                use_activ=False,
-                norm_type=NormType.Spectral,
-            )
-        )
-        layers.append(SigmoidRange(-3.0, 3.0))
-        super().__init__(*layers)
-        self.sfs = sfs
-
-    def __del__(self):
-        if hasattr(self, "sfs"):
-            self.sfs.remove()
 
 
 class DeoldifyVideoModel(SequentialEx):

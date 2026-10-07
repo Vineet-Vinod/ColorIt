@@ -8,9 +8,8 @@ This file is a practical attribution and license index, not a substitute for the
 
 | Component | Role in ColorIt | Source | License |
 |---|---|---|---|
-| DeOldify Video, Artistic, and Stable | Video colorization plus Artistic or Stable image keyframes | [jantic/DeOldify](https://github.com/jantic/DeOldify); Artistic weights from the project's canonical [DeepAI download](https://data.deepai.org/deoldify/ColorizeArtistic_gen.pth); Stable weights from the author's [Dropbox download](https://www.dropbox.com/s/axsd2g85uyixaho/ColorizeStable_gen.pth?dl=1) | MIT; the upstream project states that its listed pretrained weights are also MIT-licensed |
-| DDColor ModelScope and Artistic | Semantic color prediction; a minimal inference subset is vendored in `src/vendor/ddcolor` | [piddnad/DDColor](https://github.com/piddnad/DDColor), weights from [piddnad/ddcolor_modelscope](https://huggingface.co/piddnad/ddcolor_modelscope) and [piddnad/ddcolor_artistic](https://huggingface.co/piddnad/ddcolor_artistic) | Apache License 2.0 |
-| DeepRemaster | Reference-guided temporal restoration and color propagation; MLX port modified for Apple Silicon | [satoshiiizuka/siggraphasia2019_remastering](https://github.com/satoshiiizuka/siggraphasia2019_remastering), model from the author's [University of Tsukuba host](https://iizuka.cs.tsukuba.ac.jp/data/remasternet.pth.tar) | [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/); non-commercial use only, attribution and ShareAlike apply |
+| DeOldify Video | Video-oriented colorization base and pretrained `ColorizeVideo_gen.pth` weights | [jantic/DeOldify](https://github.com/jantic/DeOldify), weights mirrored by [spensercai/DeOldify](https://huggingface.co/spensercai/DeOldify) | MIT; the upstream project states that its listed pretrained weights are also MIT-licensed |
+| DDColor | Semantic color prediction; a minimal inference subset is vendored in `src/vendor/ddcolor` | [piddnad/DDColor](https://github.com/piddnad/DDColor), weights from [piddnad/ddcolor_modelscope](https://huggingface.co/piddnad/ddcolor_modelscope) | Apache License 2.0 |
 
 The Apache 2.0 license accompanying the vendored DDColor inference code is retained at [`src/vendor/ddcolor/LICENSE`](src/vendor/ddcolor/LICENSE).
 
@@ -22,7 +21,6 @@ DDColor credits adapted research/code from BasicSR, ColorFormer, BigColor, ConvN
 |---|---|---|
 | PyTorch | Tensor execution and model inference | [BSD-style license](https://github.com/pytorch/pytorch/blob/main/LICENSE) |
 | TorchVision | Vision model utilities | [BSD 3-Clause](https://github.com/pytorch/vision/blob/main/LICENSE) |
-| MLX | Apple Silicon tensor execution for the modified DeepRemaster networks | [MIT License](https://github.com/ml-explore/mlx/blob/main/LICENSE) |
 | NumPy | Array operations | [BSD 3-Clause](https://github.com/numpy/numpy/blob/main/LICENSE.txt) |
 | OpenCV / `opencv-python-headless` | Color spaces, CLAHE, and image processing | [Apache License 2.0](https://github.com/opencv/opencv/blob/4.x/LICENSE) and the wheel project's bundled notices |
 | Pillow | Image handling | [HPND License](https://github.com/python-pillow/Pillow/blob/main/LICENSE) |

@@ -1,7 +1,0 @@
-{
-  "source": "deep_rem.mp4",
-  "interval_frames": [2250, 3000],
-  "scene_boundaries": [2250, 2391, 2726, 2875, 2965, 2994, 3000],
-  "method": "Visually checked source frames around ffmpeg scene-score candidates; retained existing boundaries and added three missed transitions. A dissolve frame is assigned to the following shot.",
-  "added_boundaries": [2391, 2875, 2994]
-}

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 from pathlib import Path
-import sys
 
 from src.pipeline.config import load_config
 from src.pipeline.movie import run_colorize_movie
 from src.pipeline.weights import run_download_weights
-
 
 DEFAULT_MOVIE_CONFIG = Path("configs/full_movie.yaml")
 
@@ -21,6 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="{download-weights,colorize-movie}")
 
     download_parser = subparsers.add_parser("download-weights", help="Download required model weights.")
+    download_parser.add_argument("--experimental", action="store_true", help="Download FLUX + CMNET2 instead of the regular models.")
     download_parser.set_defaults(handler=handle_download_weights)
 
     movie_parser = subparsers.add_parser("colorize-movie", help="Run the full movie pipeline.")
@@ -35,9 +35,16 @@ def add_movie_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", default=None, help="Defaults to the input path with '_color' appended.")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--experimental", action="store_true", help="Use experimental FLUX + CMNET2 for clips shorter than 60 seconds. Requires Apple Silicon.")
 
 
 def handle_download_weights(args: argparse.Namespace) -> int:
+    if args.experimental:
+        from src.experimental.assets import prepare_assets
+        from src.pipeline.paths import resolve_project_paths
+
+        prepare_assets(resolve_project_paths(load_config(DEFAULT_MOVIE_CONFIG)).root)
+        return 0
     config_path = DEFAULT_MOVIE_CONFIG
     return run_download_weights(
         config=load_config(config_path),
@@ -48,6 +55,18 @@ def handle_download_weights(args: argparse.Namespace) -> int:
 
 
 def handle_colorize_movie(args: argparse.Namespace) -> int:
+    if args.experimental:
+        from src.experimental.clip import run_experimental_clip
+        from src.experimental.experimental_dataclasses import ClipRequest
+        from src.pipeline.paths import resolve_project_paths
+
+        request = ClipRequest(
+            source=Path(args.input),
+            output=Path(args.output) if args.output else None,
+            overwrite=bool(args.overwrite),
+            resume=bool(args.resume),
+        )
+        return run_experimental_clip(request, resolve_project_paths(load_config(DEFAULT_MOVIE_CONFIG)).root)
     return run_movie(
         config_path=DEFAULT_MOVIE_CONFIG,
         movie_path=Path(args.input),

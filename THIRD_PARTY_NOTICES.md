@@ -17,6 +17,22 @@ DDColor credits adapted research/code from BasicSR, ColorFormer, BigColor, ConvN
 
 ## Direct Runtime Dependencies
 
+The optional experimental clip path uses **Dan64's
+[CMNET2](https://github.com/dan64/cmnet2)** for reference-based propagation, with
+local modifications for Apple Silicon MPS. CMNET2 is based on
+[ColorMNet](https://github.com/yyang181/colormnet),
+[XMem](https://github.com/hkchengrex/XMem), and
+[XMem++](https://github.com/mbzuai-metaverse/XMem2), and uses Meta's DINOv3 backbone.
+Its upstream README attributes those projects and states that it inherits the
+original ColorMNet license terms. That README is retained in the downloaded source.
+
+The experimental reference generator is Black Forest Labs'
+[FLUX.2 Klein 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B), released
+under Apache 2.0, using the MIT-licensed [MFLUX](https://github.com/filipstrand/mflux)
+implementation. Model files and upstream source are downloaded separately from
+ColorIt. Versions, hashes, and adaptation details are recorded in
+[the experimental documentation](docs/experimental-clips.md).
+
 | Component | Purpose | Project license/reference |
 |---|---|---|
 | PyTorch | Tensor execution and model inference | [BSD-style license](https://github.com/pytorch/pytorch/blob/main/LICENSE) |

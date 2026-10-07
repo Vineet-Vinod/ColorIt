@@ -9,7 +9,7 @@ __pycache__/
 tmp/
 .mypy_cache/
 .ruff_cache/
-data/experimental/
+experiments/
 
 # Model weights and generated media
 models/deoldify/*.pth
@@ -21,7 +21,6 @@ data/final/
 data/frames/
 data/scenes/
 data/manifests/
-data/eval/
 
 # Allow directory placeholders
 !data/**/.gitkeep

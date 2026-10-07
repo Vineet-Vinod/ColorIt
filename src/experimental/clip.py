@@ -42,6 +42,7 @@ def run_experimental_clip(request: ClipRequest, root: Path) -> int:
         raise RuntimeError(
             "Install experimental dependencies with `uv sync --extra experimental`."
         )
+    assets = prepare_assets(root)
     from src.experimental.render import PROMPT, generate_references, propagate
 
     directory = root / "tmp/experimental"
@@ -90,7 +91,6 @@ def run_experimental_clip(request: ClipRequest, root: Path) -> int:
                 references.append(reference)
     finally:
         capture.release()
-    assets = prepare_assets(root)
     generate_references(assets, references, info)
     raw = run / "colored.mkv"
     propagate(normalized, raw, assets, shots, references, normalized_info)

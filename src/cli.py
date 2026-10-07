@@ -39,18 +39,13 @@ def add_movie_args(parser: argparse.ArgumentParser) -> None:
 
 
 def handle_download_weights(args: argparse.Namespace) -> int:
-    if args.experimental:
-        from src.experimental.assets import prepare_assets
-        from src.pipeline.paths import resolve_project_paths
-
-        prepare_assets(resolve_project_paths(load_config(DEFAULT_MOVIE_CONFIG)).root)
-        return 0
     config_path = DEFAULT_MOVIE_CONFIG
     return run_download_weights(
         config=load_config(config_path),
         config_path=config_path,
         url_override=None,
         force=False,
+        experimental=bool(args.experimental),
     )
 
 

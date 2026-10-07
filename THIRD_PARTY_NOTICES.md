@@ -30,8 +30,9 @@ The experimental reference generator is Black Forest Labs'
 [FLUX.2 Klein 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B), released
 under Apache 2.0, using the MIT-licensed [MFLUX](https://github.com/filipstrand/mflux)
 implementation. Model files and upstream source are downloaded separately from
-ColorIt. Versions, hashes, and adaptation details are recorded in
-[the experimental documentation](docs/experimental-clips.md).
+ColorIt. Download versions are pinned in `src/pipeline/weights.py`, downloaded
+file hashes are recorded in `data/manifests/weights.json`, and the local adapter
+is in `src/experimental/cmnet2.patch`.
 
 | Component | Purpose | Project license/reference |
 |---|---|---|

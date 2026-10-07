@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 
 class ClipRequest(BaseModel):
@@ -14,15 +14,6 @@ class ClipRequest(BaseModel):
     output: Path | None = None
     overwrite: bool = False
     resume: bool = False
-
-
-class Artifact(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    path: str
-    url: str
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    size: int = Field(gt=0)
 
 
 @dataclass(frozen=True)

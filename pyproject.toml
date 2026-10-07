@@ -29,13 +29,13 @@ experimental = [
 dev = ["pytest>=8,<10", "mypy>=1,<3", "ruff>=0.11,<1", "taskipy>=1,<2"]
 
 [tool.taskipy.tasks]
-lint = "ruff check src/experimental tests src/cli.py"
-types = "mypy --strict --follow-imports skip --ignore-missing-imports src/experimental tests"
+lint = "ruff check src/experimental tests src/cli.py src/pipeline/weights.py src/pipeline/pipeline_dataclasses.py"
+types = "mypy --strict --follow-imports skip --ignore-missing-imports src/experimental tests src/pipeline/weights.py src/pipeline/pipeline_dataclasses.py"
 test = "python -m pytest tests -q"
 ci = "task lint && task types && task test"
 
 [tool.setuptools.package-data]
-"src.experimental" = ["*.json", "*.patch"]
+"src.experimental" = ["*.patch"]
 
 [[tool.mypy.overrides]]
 module = ["pydantic.*", "pytest.*", "_pytest.*"]

@@ -1,0 +1,153 @@
+--- a/colormnet/colormnet_render.py
++++ b/colormnet/colormnet_render.py
+@@ -197,8 +197,8 @@
+         torch.autograd.set_grad_enabled(False)
+ 
+         # Model setup
+-        self.network = ColorMNet(self.config, self.config['model']).cuda().eval()
+-        self.model_weights = torch.load(self.config['model'])
++        self.network = ColorMNet(self.config, self.config['model'], map_location='cpu').to(os.environ.get("CMNET_DEVICE", "mps")).eval()
++        self.model_weights = torch.load(self.config['model'], map_location='cpu', weights_only=True)
+         self.network.load_weights(self.model_weights, init_as_zero_if_needed=True)
+         self.vid_length = vid_length
+         self.config['enable_long_term_count_usage'] = (
+@@ -238,8 +238,8 @@
+ 
+         img = self.im_transform(ref_img)
+         img_l = img[:1, :, :]
+-        img_lll = img_l.repeat(3, 1, 1).cuda()
+-        img_ab = img[1:3, :, :].cuda()
++        img_lll = img_l.repeat(3, 1, 1).to(os.environ.get("CMNET_DEVICE", "mps"))
++        img_ab = img[1:3, :, :].to(os.environ.get("CMNET_DEVICE", "mps"))
+ 
+         if self.processor.all_labels is None:
+             self.processor.set_all_labels(list(range(1, 3)))
+@@ -279,7 +279,7 @@
+ 
+         self.total_colored_frames += 1
+ 
+-        gpu_mem_free, gpu_mem_total = torch.cuda.mem_get_info()
++        gpu_mem_free, gpu_mem_total = (torch.mps.recommended_max_memory() - torch.mps.driver_allocated_memory(), torch.mps.recommended_max_memory())
+         gpu_mem_k = round(gpu_mem_free / 1024 / 1024, 1)
+         # vs.core.log_message(vs.MESSAGE_TYPE_WARNING, "CUDA free memory: " + str(gpu_mem_k) + " MB")
+         reset_cond_1 = (gpu_mem_k < 100)
+@@ -296,7 +296,7 @@
+             self.frame_count = 0
+             del self.processor
+             gc.collect()
+-            torch.cuda.empty_cache()
++            pass
+             self.config['FirstFrameIsNotExemplar'] = True  # because the reference image is the previous colored frame
+             self.processor = InferenceCore(self.network, config=self.config)
+             data = self.get_image(ti, frame_i, self.ref_img_valid)
+@@ -305,11 +305,11 @@
+                 # VRAM below threshold: aggressive slide of 70% of perm_mem
+                 n = int(self.get_perm_mem_frame_count() * 0.7)
+                 self.slide_permanent_memory(n)
+-                torch.cuda.empty_cache()
++                pass
+             data = self.get_image(ti, frame_i, self.ref_img)
+             self.frame_count += 1
+ 
+-        rgb = data['rgb'].cuda()[0]
++        rgb = data['rgb'].to(os.environ.get("CMNET_DEVICE", "mps"))[0]
+ 
+         msk = data.get('mask')
+         if not self.config['FirstFrameIsNotExemplar']:
+@@ -329,7 +329,7 @@
+ 
+         # Map possibly non-continuous labels to continuous ones
+         if msk is not None:
+-            msk = torch.Tensor(msk[0]).cuda()
++            msk = torch.Tensor(msk[0]).to(os.environ.get("CMNET_DEVICE", "mps"))
+             if need_resize:
+                 msk = self.resize_mask(msk.unsqueeze(0))[0]
+             self.processor.set_all_labels(list(range(1, 3)))
+@@ -363,7 +363,7 @@
+         self.save_last_image(out_pil_img)
+ 
+         # empty torch cache
+-        torch.cuda.empty_cache()
++        pass
+ 
+         return out_pil_img
+ 
+--- a/colormnet/model/network.py
++++ b/colormnet/model/network.py
+@@ -55,7 +55,7 @@
+                                           dropout=0,
+                                           d_att=64, # 128
+                                           max_dis=7,
+-                                          expand_ratio=1)
++                                          expand_ratio=1, enable_corr=False)
+ 
+         self.decoder = Decoder(self.value_dim, self.hidden_dim)
+ 
+@@ -182,7 +182,7 @@
+         if model_path is not None:
+             # load the model and key/value/hidden dimensions with some hacks
+             # config is updated with the loaded parameters
+-            model_weights = torch.load(model_path, map_location=map_location)
++            model_weights = torch.load(model_path, map_location=map_location, weights_only=True)
+             self.key_dim = model_weights['key_proj.key_proj.weight'].shape[0]
+             self.value_dim = model_weights['value_encoder.fuser.block2.conv2.weight'].shape[0]
+             self.disable_hidden = 'decoder.hidden_update.transform.weight' not in model_weights
+@@ -296,6 +296,9 @@
+                     "(transformers version mismatch between export and load environments)",
+                     remapped)
+             result = self.load_state_dict(filtered, strict=False)
++            if result.missing_keys or result.unexpected_keys:
++                raise RuntimeError(f'Incomplete checkpoint: {result}')
++            print(f'Checkpoint audit: all {len(own_state)} state tensors loaded', flush=True)
+             # strict=False (needed above for the legitimate network2 filter)
+             # also acted as a silent safety net for a completely wrong file
+             # (e.g. a raw training checkpoint - first-level keys
+--- a/colormnet/model/modules.py
++++ b/colormnet/model/modules.py
+@@ -107,7 +107,7 @@
+         super().__init__()
+         
+         self.single_object = single_object
+-        network = resnet.resnet18(pretrained=True, extra_dim=1 if single_object else 2)
++        network = resnet.resnet18(pretrained=False, extra_dim=1 if single_object else 2)
+         self.conv1 = network.conv1
+         self.bn1 = network.bn1
+         self.relu = network.relu  # 1/2, 64
+@@ -159,7 +159,7 @@
+     def __init__(self, backbone: str = "dinov2", dinov3_weights_dir: str = None,
+                  unlock_backbone: bool = False):
+         super().__init__()
+-        network = resnet.resnet50(pretrained=True)
++        network = resnet.resnet50(pretrained=False)
+         self.conv1 = network.conv1
+         self.bn1 = network.bn1
+         self.relu = network.relu  # 1/2, 64
+--- a/colormnet/model/attention.py
++++ b/colormnet/model/attention.py
+@@ -206,7 +206,7 @@
+                 h * w) + relative_emb
+         else:
+             unfolded_k = self.pad_and_unfold(k).view(
+-                n * self.num_head, hidden_dim,
++                n * self.num_head, self.d_att,
+                 self.window_size * self.window_size, h, w)
+             qk = (q.unsqueeze(2) * unfolded_k).sum(dim=1).view(
+                 n, self.num_head, self.window_size * self.window_size,
+@@ -336,7 +336,7 @@
+                 n, self.num_head, self.window_size * self.window_size, h * w)
+         else:
+             unfolded_k = self.pad_and_unfold(k).view(
+-                n * self.num_head, hidden_dim,
++                n * self.num_head, self.d_att,
+                 self.window_size * self.window_size, h, w)
+             qk = (q.unsqueeze(2) * unfolded_k).sum(dim=1).view(
+                 n, self.num_head, self.window_size * self.window_size, h * w)
+@@ -829,7 +829,7 @@
+                 n, self.num_head, self.window_size * self.window_size, h * w)
+         else:
+             unfolded_k = self.pad_and_unfold(k).view(
+-                n * self.num_head, hidden_dim,
++                n * self.num_head, self.d_att,
+                 self.window_size * self.window_size, h, w)
+             qk = (q.unsqueeze(2) * unfolded_k).sum(dim=1).view(
+                 n, self.num_head, self.window_size * self.window_size, h * w)

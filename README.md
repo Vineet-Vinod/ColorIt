@@ -173,6 +173,11 @@ By default, output is written next to the input with `_color` appended. The publ
 
 ## MVP Scope
 
+An optional work-in-progress path uses FLUX references and Dan64's CMNET2 to
+color clips shorter than 60 seconds on Apple Silicon. Install the experimental
+extra and add `--experimental` to `colorize-movie`; see
+[experimental clip colorization](docs/experimental-clips.md) for setup and limits.
+
 The MVP is an automatic pipeline that handles a wide variety of ordinary film scenes without masks, prompts, actor labels, or per-shot manual grading. It improves weak contrast conservatively, produces a usable color pass, preserves the source presentation, and keeps the final file practical.
 
 It does not claim perfect historical color accuracy. Frame-to-frame consistency has improved, but difficult cuts, occlusion, fast action, actor identity, and costume continuity remain open problems.

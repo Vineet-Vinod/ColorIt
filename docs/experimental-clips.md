@@ -71,3 +71,37 @@ editing implementation. See [third-party notices](../THIRD_PARTY_NOTICES.md).
 
 The old `deep_rem` experiments remain recoverable in Git history. The baseline
 restore commit makes the tracked files match main before introducing this path.
+
+## Local validation, October 7, 2026
+
+Ruff, strict mypy for the experimental module and tests, and all 14 tests pass:
+
+```sh
+uv run --extra experimental task ci
+```
+
+The checks cover the duration limit, CLI dispatch, output protection, checksum
+rejection, the missed-cut regression, luminance restoration, and real FFmpeg
+delivery with fractional frame rates both with and without audio. A real
+60-second clip was also rejected before model setup. The regular CLI was imported
+successfully while access to MLX, MFLUX, and Pydantic was blocked.
+
+Two dance excerpts were rendered in tmux on the M3 Ultra. Each contained two
+detected shots and six automatically generated references. The eight-second
+delivery has 200 frames and is 1.016 times its input size. The corrected
+twelve-second delivery has 300 frames and is 1.038 times its input size. Both
+retain 25 fps, 1080p, their exact duration, and audio, and decode completely.
+
+The first twelve-second run exposed a missed cut at the original 0.25 threshold.
+The final detector finds it at frame 141 using threshold 0.1; nearby candidates
+are consolidated so the transition does not create a one-frame shot.
+
+Inspected sequence samples show sky, vegetation, and costume color, but the
+woman's costume changes from pink in the wider shot to green in the close-up,
+with further color variation during motion. The second excerpt's distant
+references also disagree about pink versus blue. These are expected WIP quality
+failures, rather than evidence of solved temporal or costume consistency.
+
+Videos, review sheets, full decoder checks, logs, and `validation.json` remain
+under the canonical runtime root at `tmp/deep_rem_pr/`. Per-run references and
+lossless intermediates remain under `tmp/experimental/`.

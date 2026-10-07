@@ -4,7 +4,6 @@ import gc
 import importlib
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -20,6 +19,7 @@ from src.experimental.experimental_dataclasses import (
     Shot,
 )
 from src.experimental.media import restore_luminance
+from src.pipeline.weights import CMNET_CHECKPOINT
 
 PROMPT = (
     "Colorize this black-and-white archival film frame. Preserve its people, faces, "
@@ -80,7 +80,8 @@ class CMNETFactory(Protocol):
         encode_mode: int,
         max_memory_frames: int,
         reset_on_ref_update: bool,
-        project_dir: str,
+        checkpoint_path: str,
+        dinov3_weights_dir: str,
         backbone: str,
         enable_proximity_bias: bool,
     ) -> CMNETRenderer: ...
@@ -125,19 +126,18 @@ def propagate(
     references: list[Reference],
     info: ClipInfo,
 ) -> None:
+    from src.vendor.cmnet2.colormnet_render import ColorMNetRender
+
     os.environ["CMNET_DEVICE"] = "mps"
-    sys.path.insert(0, str(assets.cmnet))
-    factory = cast(
-        CMNETFactory,
-        importlib.import_module("colormnet.colormnet_render").ColorMNetRender,
-    )
+    factory = cast(CMNETFactory, ColorMNetRender)
     renderer = factory(
         image_size=-1,
         vid_length=max(info.frames, 100),
         encode_mode=2,
         max_memory_frames=1000,
         reset_on_ref_update=False,
-        project_dir=str(assets.cmnet),
+        checkpoint_path=str(assets.cmnet / "weights" / CMNET_CHECKPOINT),
+        dinov3_weights_dir=str(assets.cmnet / "weights/dinov3-vitb16"),
         backbone="dinov3",
         enable_proximity_bias=False,
     )

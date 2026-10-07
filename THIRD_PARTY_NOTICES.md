@@ -24,15 +24,18 @@ local modifications for Apple Silicon MPS. CMNET2 is based on
 [XMem](https://github.com/hkchengrex/XMem), and
 [XMem++](https://github.com/mbzuai-metaverse/XMem2), and uses Meta's DINOv3 backbone.
 Its upstream README attributes those projects and states that it inherits the
-original ColorMNet license terms. That README is retained in the downloaded source.
+original ColorMNet license terms. The inference subset and local adaptations are
+vendored in [`src/vendor/cmnet2`](src/vendor/cmnet2/README.md). The upstream README
+and ColorMNet's license text and component notices are retained there in
+[`README.upstream.md`](src/vendor/cmnet2/README.upstream.md) and
+[`LICENSES`](src/vendor/cmnet2/LICENSES).
 
 The experimental reference generator is Black Forest Labs'
 [FLUX.2 Klein 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B), released
 under Apache 2.0, using the MIT-licensed [MFLUX](https://github.com/filipstrand/mflux)
-implementation. Model files and upstream source are downloaded separately from
-ColorIt. Download versions are pinned in `src/pipeline/weights.py`, downloaded
-file hashes are recorded in `data/manifests/weights.json`, and the local adapter
-is in `src/experimental/cmnet2.patch`.
+implementation. Model weights are downloaded separately from ColorIt. Download
+versions are pinned in `src/pipeline/weights.py`, and downloaded file hashes are
+recorded in `data/manifests/weights.json`.
 
 | Component | Purpose | Project license/reference |
 |---|---|---|

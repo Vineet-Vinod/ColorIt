@@ -38,7 +38,6 @@ FLUX_FILES = (
     "vae/config.json",
     "vae/diffusion_pytorch_model.safetensors",
 )
-CMNET_REVISION = "e0d51432d224476769babfbff5e90f531a454939"
 CMNET_CHECKPOINT = "DINOv3FeatureV6_LocalAtten_p374099.pth"
 
 
@@ -54,12 +53,6 @@ def experimental_weight_targets(root: Path) -> tuple[WeightDownload, ...]:
                 flux / name,
             )
             for name in FLUX_FILES
-        ),
-        WeightDownload(
-            "cmnet2-source",
-            "dan64/cmnet2",
-            f"https://codeload.github.com/dan64/cmnet2/tar.gz/{CMNET_REVISION}",
-            cmnet / "cmnet2-source.tar.gz",
         ),
         WeightDownload(
             "cmnet2",

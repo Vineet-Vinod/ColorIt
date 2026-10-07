@@ -23,6 +23,7 @@ experimental = [
   "pydantic>=2,<3",
   "scikit-image>=0.25,<1",
   "einops>=0.8,<1",
+  "transformers>=4.57,<6",
 ]
 
 [dependency-groups]
@@ -35,7 +36,7 @@ test = "python -m pytest tests -q"
 ci = "task lint && task types && task test"
 
 [tool.setuptools.package-data]
-"src.experimental" = ["*.patch"]
+"src.vendor.cmnet2" = ["LICENSES*", "README*.md"]
 
 [[tool.mypy.overrides]]
 module = ["pydantic.*", "pytest.*", "_pytest.*"]
